@@ -36,7 +36,7 @@ class MCP9600:
 
         self._mcp9600 = mcp2221.I2C_Slave(0x67, reg_bytes = 1)
         # print(self._mcp9600.is_present())
-        print(self._mcp9600.read(30).hex(sep=' '))
+        print(self._mcp9600.read_register(0x00, 30).hex(sep=' '))
 
     def _read_register(self, register):
         reg_bytes = self._mcp9600.read_register(register[0], length=register[1])
@@ -51,8 +51,13 @@ class MCP9600:
         hj_bytes = self._read_register(MCP9600.HOT_JUNC_TEMP)
         hj_high = hj_bytes[0]
         hj_low = hj_bytes[1]
-        hj_temp = float(((hj_high & 0x7F) << 8) | hj_low)/16
-
+        if ((hj_high & 0x80) != 0):
+            hj_temp = int((((hj_high & 0x7F) << 8) | hj_low))
+            hj_temp = (~hj_temp & 0x80) + 1
+            hj_temp = hj_temp / 16
+            hj_temp = hj_temp * -1
+        else:
+            hj_temp = float(((hj_high & 0x7F) << 8) | hj_low) / 16
         return(hj_temp)
 
     @property
