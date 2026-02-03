@@ -35,9 +35,7 @@ class MCP9600:
     def __init__(self, mcp2221):
 
         self._mcp9600 = mcp2221.I2C_Slave(0x67, reg_bytes = 1)
-        # print(self._mcp9600.is_present())
-        print(self._mcp9600.read_register(0x00, 30).hex(sep=' '))
-
+ 
     def _read_register(self, register):
         reg_bytes = self._mcp9600.read_register(register[0], length=register[1])
         return(reg_bytes)
