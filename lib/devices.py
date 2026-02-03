@@ -1,12 +1,11 @@
 import EasyMCP2221
 from enum import Enum
+
 class MCP2221:
 
     @staticmethod
     def get_mcp2221():
-        mcp = EasyMCP2221.Device()
-        return(mcp)
-        # print(mcp)
+        return(EasyMCP2221.Device())
 
 class MCP9600:
 
@@ -35,8 +34,7 @@ class MCP9600:
 
     def __init__(self, mcp2221):
 
-        self._mcp2221 = mcp2221
-        self._mcp9600 = self._mcp2221.I2C_Slave(0x67, reg_bytes = 1)
+        self._mcp9600 = mcp2221.I2C_Slave(0x67, reg_bytes = 1)
         # print(self._mcp9600.is_present())
         print(self._mcp9600.read(30).hex(sep=' '))
 
