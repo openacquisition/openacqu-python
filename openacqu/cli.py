@@ -13,7 +13,8 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-from openacqu import ProbeTemp1, ProductNumber, __version__
+from openacqu import Probe, ProbePh1, ProbeTemp1, ProductNumber, __version__
+from openacqu.chips.lmp91200 import PgaGain, VcmLevel, VocmSelect
 from openacqu.chips.mcp9600 import AdcResolution, ThermocoupleType
 from openacqu.transport.base import I2CBus
 from openacqu.transport.mcp2221 import MCP2221Bus, open_mcp2221_bus
@@ -23,6 +24,16 @@ _ADC_BY_BITS = {
     16: AdcResolution.BITS_16,
     14: AdcResolution.BITS_14,
     12: AdcResolution.BITS_12,
+}
+
+_VCM_BY_NAME = {
+    "7/8": VcmLevel.VREF_7_8,
+    "3/4": VcmLevel.VREF_3_4,
+    "5/8": VcmLevel.VREF_5_8,
+    "1/2": VcmLevel.VREF_1_2,
+    "3/8": VcmLevel.VREF_3_8,
+    "1/4": VcmLevel.VREF_1_4,
+    "1/8": VcmLevel.VREF_1_8,
 }
 
 
@@ -143,6 +154,35 @@ def _build_parser() -> argparse.ArgumentParser:
 
     temp_sub.add_parser("identify", help="read MCP9600 device ID and revision")
 
+    ph = sub.add_parser(
+        "ph",
+        help="pH probe AFE / SC18IS606 commands (config only; ADC not wired yet)",
+    )
+    ph_sub = ph.add_subparsers(dest="ph_command", required=True)
+    ph_sub.add_parser("info", help="show bridge address, SPI config, and AFE cache")
+    ph_sub.add_parser("bridge", help="show SC18IS606 address and cached SPI config byte")
+    ph_cfg = ph_sub.add_parser(
+        "configure",
+        help="write LMP91200 pH defaults (PGA 5, VCM 1/2 VREF, VOCM, diag off)",
+    )
+    ph_cfg.add_argument(
+        "--verify",
+        action="store_true",
+        help="double-clock and verify shift-register echo",
+    )
+    ph_sub.add_parser("config", help="show cached LMP91200 configuration word")
+    ph_pga = ph_sub.add_parser("pga", help="get or set PGA gain (5 or 10 V/V)")
+    ph_pga.add_argument("value", nargs="?", type=int, choices=[5, 10])
+    ph_vcm = ph_sub.add_parser("vcm", help="get or set VCM as fraction of VREF")
+    ph_vcm.add_argument("value", nargs="?", choices=sorted(_VCM_BY_NAME))
+    ph_vocm = ph_sub.add_parser("vocm", help="get or set VOUT reference (vocm|gnd)")
+    ph_vocm.add_argument("value", nargs="?", choices=["vocm", "gnd"])
+    ph_diag = ph_sub.add_parser("diag", help="get or set diagnostic enable (on|off)")
+    ph_diag.add_argument("value", nargs="?", choices=["on", "off"])
+    ph_write = ph_sub.add_parser("write", help="write raw 16-bit AFE config word")
+    ph_write.add_argument("word", type=lambda s: int(s, 0), help="e.g. 0x0000 or 0x0800")
+    ph_write.add_argument("--verify", action="store_true")
+
     return parser
 
 
@@ -152,11 +192,18 @@ def _keepalive_arg(args: argparse.Namespace) -> bool | float:
     return args.keepalive
 
 
-def _open_probe(args: argparse.Namespace, bus: I2CBus | None) -> ProbeTemp1:
+def _open_probe(args: argparse.Namespace, bus: I2CBus | None) -> Probe:
+    keepalive = _keepalive_arg(args)
+    if args.command == "ph":
+        return ProbePh1(
+            bus,
+            check_product=args.check_product,
+            keepalive=keepalive,
+        )
     return ProbeTemp1(
         bus,
         check_product=args.check_product,
-        keepalive=_keepalive_arg(args),
+        keepalive=keepalive,
     )
 
 
@@ -229,12 +276,10 @@ def _run(args: argparse.Namespace, bus: I2CBus | None) -> int:
         probe.close()
 
 
-def _dispatch(args: argparse.Namespace, probe: ProbeTemp1) -> int:
+def _dispatch(args: argparse.Namespace, probe: Probe) -> int:
     cmd = args.command
 
     if cmd == "info":
-        tc = probe.thermocouple
-        device_id, revision = tc.read_device_id_revision()
         product = probe.product_number
         try:
             product_name = ProductNumber(product).name
@@ -242,13 +287,16 @@ def _dispatch(args: argparse.Namespace, probe: ProbeTemp1) -> int:
             product_name = "unknown"
         print(f"product:     0x{product:02X} ({product_name})")
         print(f"eui48:       {probe.eeprom.eui48_str}")
-        print(f"mcp9600 id:  0x{device_id:02X}")
-        print(f"mcp9600 rev: {tc.revision_str} (0x{revision:02X})")
-        print(f"tc type:     {tc.thermocouple_type.name}")
-        print(f"filter:      {tc.filter_coefficient}")
-        print(f"adc:         {tc.adc_resolution.name}")
-        print(f"ready:       {tc.temperature_ready}")
-        print(f"open/range:  {tc.open_circuit}")
+        if isinstance(probe, ProbeTemp1):
+            tc = probe.thermocouple
+            device_id, revision = tc.read_device_id_revision()
+            print(f"mcp9600 id:  0x{device_id:02X}")
+            print(f"mcp9600 rev: {tc.revision_str} (0x{revision:02X})")
+            print(f"tc type:     {tc.thermocouple_type.name}")
+            print(f"filter:      {tc.filter_coefficient}")
+            print(f"adc:         {tc.adc_resolution.name}")
+            print(f"ready:       {tc.temperature_ready}")
+            print(f"open/range:  {tc.open_circuit}")
         return 0
 
     if cmd == "product":
@@ -294,6 +342,8 @@ def _dispatch(args: argparse.Namespace, probe: ProbeTemp1) -> int:
             return 0
 
     if cmd == "temp":
+        if not isinstance(probe, ProbeTemp1):
+            raise TypeError("temp commands require ProbeTemp1")
         tc = probe.thermocouple
         if args.temp_command == "read":
             value = tc.read_hot_junction_c(wait=not args.no_wait, timeout_s=args.timeout)
@@ -332,7 +382,95 @@ def _dispatch(args: argparse.Namespace, probe: ProbeTemp1) -> int:
             print(f"0x{device_id:02X} 0x{revision:02X} ({tc.revision_str})")
             return 0
 
+    if cmd == "ph":
+        if not isinstance(probe, ProbePh1):
+            raise TypeError("ph commands require ProbePh1")
+        return _dispatch_ph(args, probe)
+
     raise AssertionError(f"unhandled command: {args.command}")
+
+
+def _print_afe_config(afe) -> None:
+    print(f"config:  0x{afe.config:04X}")
+    print(f"mode:    {afe.meas_mode.name}")
+    print(f"pga:     {5 if afe.pga is PgaGain.GAIN_5 else 10} V/V")
+    vcm_name = next(
+        (name for name, level in _VCM_BY_NAME.items() if level is afe.vcm),
+        f"0b{int(afe.vcm):03b}",
+    )
+    print(f"vcm:     {vcm_name} VREF")
+    print(f"vocm:    {afe.vocm.name.lower()}")
+    print(f"diag:    {'on' if afe.diag_en else 'off'}")
+
+
+def _dispatch_ph(args: argparse.Namespace, probe: ProbePh1) -> int:
+    afe = probe.afe
+    bridge = probe.bridge
+    cmd = args.ph_command
+
+    if cmd == "info":
+        print(f"product:       0x{probe.product_number:02X}")
+        print(f"bridge:        0x{bridge.address:02X}")
+        print(f"spi_config:    0x{bridge.config_byte:02X}")
+        _print_afe_config(afe)
+        print("adc:           not configured (choose MCP2221A ADC or I2C ADC)")
+        return 0
+
+    if cmd == "bridge":
+        print(f"0x{bridge.address:02X} config=0x{bridge.config_byte:02X}")
+        return 0
+
+    if cmd == "configure":
+        afe.configure_ph(verify=args.verify)
+        _print_afe_config(afe)
+        return 0
+
+    if cmd == "config":
+        _print_afe_config(afe)
+        return 0
+
+    if cmd == "pga":
+        if args.value is None:
+            print(5 if afe.pga is PgaGain.GAIN_5 else 10)
+        else:
+            afe.pga = PgaGain.GAIN_10 if args.value == 10 else PgaGain.GAIN_5
+            print(args.value)
+        return 0
+
+    if cmd == "vcm":
+        if args.value is None:
+            name = next(
+                (n for n, level in _VCM_BY_NAME.items() if level is afe.vcm),
+                str(int(afe.vcm)),
+            )
+            print(name)
+        else:
+            afe.vcm = _VCM_BY_NAME[args.value]
+            print(args.value)
+        return 0
+
+    if cmd == "vocm":
+        if args.value is None:
+            print(afe.vocm.name.lower())
+        else:
+            afe.vocm = VocmSelect.GND if args.value == "gnd" else VocmSelect.VOCM
+            print(afe.vocm.name.lower())
+        return 0
+
+    if cmd == "diag":
+        if args.value is None:
+            print("on" if afe.diag_en else "off")
+        else:
+            afe.diag_en = args.value == "on"
+            print("on" if afe.diag_en else "off")
+        return 0
+
+    if cmd == "write":
+        afe.write_config(args.word, verify=args.verify)
+        print(f"0x{afe.config:04X}")
+        return 0
+
+    raise AssertionError(f"unhandled ph command: {cmd}")
 
 
 def main(argv: Sequence[str] | None = None, *, bus: I2CBus | None = None) -> int:

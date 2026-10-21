@@ -9,7 +9,7 @@ from openacqu.colors import (
     named_colors,
     resolve_to_pwm,
 )
-from openacqu.models import Probe, ProbeTemp1
+from openacqu.models import Probe, ProbePh1, ProbeTemp1
 from openacqu.product import ProductNumber
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "LedColorProfile",
     "PerceptualMode",
     "Probe",
+    "ProbePh1",
     "ProbeTemp1",
     "ProductNumber",
     "named_colors",

@@ -48,6 +48,13 @@ class MCP2221Device:
     def write_register(self, register: int, data: bytes | list[int]) -> None:
         self._slave.write_register(register, list(data))
 
+    def write(self, data: bytes | list[int]) -> None:
+        self._slave.write(list(data))
+
+    def read(self, length: int = 1) -> bytes:
+        data = self._slave.read(length)
+        return bytes(data)
+
 
 class MCP2221Bus:
     """I2CBus adapter over an EasyMCP2221 ``Device`` instance."""

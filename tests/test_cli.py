@@ -5,9 +5,11 @@ from __future__ import annotations
 from openacqu.chips.eeprom_24aa025e48 import EUI48_OFFSET
 from openacqu.chips.fxl6408 import DEFAULT_ADDRESS as FXL_ADDR
 from openacqu.chips.mcp9600 import EXPECTED_DEVICE_ID
+from openacqu.chips.sc18is606 import DEFAULT_ADDRESS as BRIDGE_ADDR
 from openacqu.cli import main
 from openacqu.product import ProductNumber
 from openacqu.transport.fake import FakeI2CBus
+from openacqu.transport.fake_sc18is606 import FakeSC18IS606
 
 
 def _bus_with_temp_probe() -> FakeI2CBus:
@@ -98,3 +100,42 @@ def test_cli_check_product_mismatch() -> None:
     bus = _bus_with_temp_probe()
     bus.memory(FXL_ADDR)[0x0F] = 0x99
     assert main(["--check-product", "product"], bus=bus) == 1
+
+
+def _bus_with_ph_probe() -> FakeI2CBus:
+    bus = FakeI2CBus()
+    bus.memory(FXL_ADDR)[0x0F] = ProductNumber.PH
+    bus.memory(0x50)[EUI48_OFFSET : EUI48_OFFSET + 6] = bytes(
+        [0x00, 0x04, 0xA3, 0xAA, 0xBB, 0xCC]
+    )
+    bus.install(BRIDGE_ADDR, FakeSC18IS606())
+    return bus
+
+
+def test_cli_ph_configure_and_fields(capsys) -> None:
+    bus = _bus_with_ph_probe()
+
+    assert main(["ph", "configure"], bus=bus) == 0
+    out = capsys.readouterr().out
+    assert "config:  0x0000" in out
+    assert "pga:     5 V/V" in out
+
+    # Each CLI invocation opens a fresh probe; setters report the value written.
+    assert main(["ph", "pga", "10"], bus=bus) == 0
+    assert capsys.readouterr().out.strip() == "10"
+    assert main(["ph", "vcm", "3/4"], bus=bus) == 0
+    assert capsys.readouterr().out.strip() == "3/4"
+    assert main(["ph", "vocm", "gnd"], bus=bus) == 0
+    assert capsys.readouterr().out.strip() == "gnd"
+    assert main(["ph", "diag", "on"], bus=bus) == 0
+    assert capsys.readouterr().out.strip() == "on"
+    assert main(["ph", "write", "0x0A00"], bus=bus) == 0
+    assert capsys.readouterr().out.strip() == "0x0A00"
+
+    assert main(["ph", "bridge"], bus=bus) == 0
+    assert "0x28" in capsys.readouterr().out
+
+    assert main(["ph", "info"], bus=bus) == 0
+    info = capsys.readouterr().out
+    assert "bridge:        0x28" in info
+    assert "adc:           not configured" in info

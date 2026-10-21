@@ -9,3 +9,4 @@ class ProductNumber(IntEnum):
     """8-bit product identity read from the GPIO expander Input Status."""
 
     TEMPERATURE = 0x01
+    PH = 0x02
