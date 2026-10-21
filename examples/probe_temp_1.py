@@ -5,9 +5,10 @@ use the unit tests with FakeI2CBus instead.
 """
 
 from openacqu import ProbeTemp1
-from openacqu.chips.mcp9600 import ThermocoupleType
+from openacqu.chips.mcp9600 import AdcResolution, ThermocoupleType
 
 probe = ProbeTemp1(check_product=True)
+tc = probe.thermocouple
 
 print()
 print("Product number")
@@ -16,18 +17,29 @@ print()
 print("EUI-48")
 print(probe.eeprom.eui48_str)
 print()
-print("Hot junction temp (°C)")
-print(probe.temperature_c)
+print("MCP9600 identify")
+print(tc.identify())
+print(f"revision {tc.revision_str}, ADC {tc.adc_resolution.name}")
+print()
+print("Open circuit / out of range")
+print(tc.open_circuit)
+print()
+print("Hot junction temp (°C), waiting for conversion")
+print(tc.read_hot_junction_c(wait=True))
 print()
 print("Thermocouple type")
-print(probe.thermocouple.thermocouple_type)
-probe.thermocouple.thermocouple_type = ThermocoupleType.K
-print(probe.thermocouple.thermocouple_type)
+print(tc.thermocouple_type)
+tc.thermocouple_type = ThermocoupleType.K
+print(tc.thermocouple_type)
 print()
 print("Filter coefficient")
-print(probe.thermocouple.filter_coefficient)
-probe.thermocouple.filter_coefficient = 0
-print(probe.thermocouple.filter_coefficient)
+print(tc.filter_coefficient)
+tc.filter_coefficient = 0
+print(tc.filter_coefficient)
+print()
+print("ADC resolution -> 16-bit")
+tc.adc_resolution = AdcResolution.BITS_16
+print(tc.adc_resolution)
 print()
 print("LED green pulse")
 probe.led.set_rgb(0, 64, 0)

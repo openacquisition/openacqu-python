@@ -1,13 +1,24 @@
-"""Microchip MCP9600 thermocouple EMF-to-temperature converter."""
+"""Microchip MCP9600 thermocouple EMF-to-temperature converter.
+
+Targets the MCP9600T-E/MX (and other MCP9600/L00/RL00 variants). Open-circuit
+detection is via STATUS bit 4 (Input Range); the MCP9601's dedicated OC/SC
+alert pins are not present on this part.
+"""
 
 from __future__ import annotations
 
+import time
 from enum import IntEnum
 
 from openacqu.transport.base import I2CBus, I2CDevice
 
 # Default ADDR-pin configuration used on ProbeTemp1 hardware.
 DEFAULT_ADDRESS = 0x67
+EXPECTED_DEVICE_ID = 0x40
+
+_STATUS_BURST_COMPLETE = 0x80
+_STATUS_TH_UPDATE = 0x40
+_STATUS_INPUT_RANGE = 0x10  # open-circuit / out-of-range on MCP9600
 
 
 class ThermocoupleType(IntEnum):
@@ -21,6 +32,15 @@ class ThermocoupleType(IntEnum):
     E = 0x5
     B = 0x6
     R = 0x7
+
+
+class AdcResolution(IntEnum):
+    """ADC measurement resolution (DEVICE_CONFIG bits 6:5)."""
+
+    BITS_18 = 0b00  # ~320 ms conversion
+    BITS_16 = 0b01  # ~80 ms
+    BITS_14 = 0b10  # ~20 ms
+    BITS_12 = 0b11  # ~5 ms
 
 
 class MCP9600:
@@ -73,6 +93,8 @@ class MCP9600:
             raise ValueError("temperature register must be 2 bytes")
         return int.from_bytes(raw, byteorder="big", signed=True) / 16.0
 
+    # --- Temperature ---------------------------------------------------------
+
     @property
     def hot_junction_c(self) -> float:
         """Hot-junction temperature in °C."""
@@ -87,6 +109,62 @@ class MCP9600:
     def cold_junction_c(self) -> float:
         """Cold-junction (ambient) temperature in °C."""
         return self.decode_temperature(self._read_register(self.COLD_JUNC_TEMP))
+
+    # --- Status / data-ready / open-circuit ----------------------------------
+
+    @property
+    def status(self) -> int:
+        """Raw STATUS register value."""
+        return self._read_register(self.STATUS)[0]
+
+    @property
+    def temperature_ready(self) -> bool:
+        """True when STATUS.TH_UPDATE indicates a fresh conversion."""
+        return bool(self.status & _STATUS_TH_UPDATE)
+
+    @property
+    def open_circuit(self) -> bool:
+        """True when STATUS input-range / open-circuit flag is set.
+
+        On the MCP9600 this is STATUS bit 4 (Input Range). A disconnected
+        thermocouple typically drives the EMF out of range and sets this bit.
+        """
+        return bool(self.status & _STATUS_INPUT_RANGE)
+
+    def clear_temperature_ready(self) -> None:
+        """Clear STATUS.TH_UPDATE so the next conversion can be polled."""
+        status = self.status & ~_STATUS_TH_UPDATE
+        self._write_register(self.STATUS, bytes([status]))
+
+    def wait_for_temperature(self, *, timeout_s: float = 1.0, poll_s: float = 0.01) -> None:
+        """Clear TH_UPDATE, then wait until the next conversion completes.
+
+        Raises
+        ------
+        TimeoutError
+            If ``timeout_s`` elapses before TH_UPDATE is set again.
+        """
+        if timeout_s <= 0:
+            raise ValueError("timeout_s must be > 0")
+        if poll_s <= 0:
+            raise ValueError("poll_s must be > 0")
+        self.clear_temperature_ready()
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.temperature_ready:
+                return
+            time.sleep(poll_s)
+        raise TimeoutError(
+            f"MCP9600 temperature conversion not ready within {timeout_s:.3f}s"
+        )
+
+    def read_hot_junction_c(self, *, wait: bool = True, timeout_s: float = 1.0) -> float:
+        """Read hot-junction °C, optionally waiting for a fresh conversion."""
+        if wait:
+            self.wait_for_temperature(timeout_s=timeout_s)
+        return self.hot_junction_c
+
+    # --- Sensor config -------------------------------------------------------
 
     @property
     def thermocouple_type(self) -> ThermocoupleType:
@@ -114,3 +192,53 @@ class MCP9600:
         sensor_config = self._read_register(self.SENSOR_CONFIG)[0]
         sensor_config = (sensor_config & 0xF8) | filter_coef
         self._write_register(self.SENSOR_CONFIG, bytes([sensor_config]))
+
+    # --- Device config / ADC resolution --------------------------------------
+
+    @property
+    def adc_resolution(self) -> AdcResolution:
+        """ADC measurement resolution (18 / 16 / 14 / 12 bit)."""
+        register = self._read_register(self.DEVICE_CONFIG)[0]
+        return AdcResolution((register >> 5) & 0x03)
+
+    @adc_resolution.setter
+    def adc_resolution(self, resolution: AdcResolution) -> None:
+        if not isinstance(resolution, AdcResolution):
+            raise TypeError("adc_resolution must be an AdcResolution")
+        config = self._read_register(self.DEVICE_CONFIG)[0]
+        config = (config & 0x9F) | (int(resolution) << 5)
+        self._write_register(self.DEVICE_CONFIG, bytes([config]))
+
+    # --- Device ID / revision ------------------------------------------------
+
+    def read_device_id_revision(self) -> tuple[int, int]:
+        """Return ``(device_id, revision)`` from register 0x20.
+
+        MCP9600 family device ID is ``0x40``. Revision high nibble = major,
+        low nibble = minor (``0x10`` = rev 1.0).
+        """
+        raw = self._read_register(self.DEVICE_ID_REV)
+        return raw[0], raw[1]
+
+    @property
+    def device_id(self) -> int:
+        return self.read_device_id_revision()[0]
+
+    @property
+    def revision(self) -> int:
+        return self.read_device_id_revision()[1]
+
+    @property
+    def revision_str(self) -> str:
+        rev = self.revision
+        return f"{(rev >> 4) & 0x0F}.{rev & 0x0F}"
+
+    def identify(self, *, expected_id: int = EXPECTED_DEVICE_ID) -> tuple[int, int]:
+        """Read ID/revision and raise if ``device_id`` is unexpected."""
+        device_id, revision = self.read_device_id_revision()
+        if device_id != expected_id:
+            raise LookupError(
+                f"unexpected MCP9600 device ID 0x{device_id:02X} "
+                f"(expected 0x{expected_id:02X})"
+            )
+        return device_id, revision
