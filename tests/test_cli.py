@@ -67,6 +67,9 @@ def test_cli_led_and_identify(capsys) -> None:
     assert capsys.readouterr().out.strip() == "1 2 3"
     assert main(["led", "get"], bus=bus) == 0
     assert capsys.readouterr().out.strip() == "1 2 3"
+    assert main(["led", "color", "red", "--brightness", "1"], bus=bus) == 0
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("red -> ")
     assert main(["led", "off"], bus=bus) == 0
     assert capsys.readouterr().out.strip() == "off"
 

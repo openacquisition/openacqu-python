@@ -6,6 +6,9 @@ Schematic mapping (common-anode RGB LED):
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from openacqu.colors import DEFAULT_PROFILE, LedColorProfile, resolve_to_pwm
 from openacqu.transport.base import I2CBus, I2CDevice
 
 DEFAULT_ADDRESS = 0x2D
@@ -29,10 +32,17 @@ _ALL_OUTPUTS_EN = 0x07  # OUT2|OUT1|OUT0
 class LP5817:
     """RGB LED driver with a small high-level color API."""
 
-    def __init__(self, bus: I2CBus, address: int = DEFAULT_ADDRESS) -> None:
+    def __init__(
+        self,
+        bus: I2CBus,
+        address: int = DEFAULT_ADDRESS,
+        *,
+        color_profile: LedColorProfile = DEFAULT_PROFILE,
+    ) -> None:
         self._address = address
         self._dev: I2CDevice = bus.device(address, reg_bytes=1)
         self._initialized = False
+        self.color_profile = color_profile
 
     @property
     def address(self) -> int:
@@ -84,8 +94,28 @@ class LP5817:
         self._write(_OUT2_PWM, blue)
 
     def set_rgb(self, red: int, green: int, blue: int) -> None:
-        """Alias for :meth:`set_pwm`."""
+        """Set raw PWM (no named-color / perceptual transform)."""
         self.set_pwm(red, green, blue)
+
+    def set_color(
+        self,
+        color: str | Iterable[int],
+        *,
+        brightness: float = 1.0,
+        profile: LedColorProfile | None = None,
+    ) -> tuple[int, int, int]:
+        """Set LED from a CSS name, ``#rrggbb``, or RGB triple.
+
+        Applies :attr:`color_profile` (LED gains + perceptual brightness)
+        unless ``profile`` is passed. Returns the PWM triple written.
+        """
+        pwm = resolve_to_pwm(
+            color,
+            brightness=brightness,
+            profile=profile if profile is not None else self.color_profile,
+        )
+        self.set_pwm(*pwm)
+        return pwm
 
     def off(self) -> None:
         """Turn all channels off (PWM = 0)."""

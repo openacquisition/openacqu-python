@@ -44,10 +44,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
     led = sub.add_parser("led", help="control the RGB LED")
     led_sub = led.add_subparsers(dest="led_command", required=True)
-    led_set = led_sub.add_parser("set", help="set PWM levels (0-255)")
+    led_set = led_sub.add_parser("set", help="set raw PWM levels (0-255), no color profile")
     led_set.add_argument("red", type=int)
     led_set.add_argument("green", type=int)
     led_set.add_argument("blue", type=int)
+    led_color = led_sub.add_parser(
+        "color",
+        help="set CSS name or #rrggbb via LED color profile (gains + perceptual dimming)",
+    )
+    led_color.add_argument("name", help="CSS3 color name or #rrggbb / #rgb")
+    led_color.add_argument(
+        "--brightness",
+        type=float,
+        default=1.0,
+        help="0..1 perceived brightness (CIE L* by default)",
+    )
+    led_sub.add_parser("colors", help="list CSS3 color names")
     led_sub.add_parser("off", help="turn LED off")
     led_sub.add_parser("get", help="read current PWM levels")
 
@@ -159,6 +171,15 @@ def _dispatch(args: argparse.Namespace, probe: ProbeTemp1) -> int:
         if args.led_command == "set":
             probe.led.set_rgb(args.red, args.green, args.blue)
             print(f"{args.red} {args.green} {args.blue}")
+            return 0
+        if args.led_command == "color":
+            pwm = probe.led.set_color(args.name, brightness=args.brightness)
+            print(f"{args.name} -> {pwm[0]} {pwm[1]} {pwm[2]}")
+            return 0
+        if args.led_command == "colors":
+            from openacqu.colors import named_colors
+
+            print("\n".join(named_colors()))
             return 0
         if args.led_command == "off":
             probe.led.off()

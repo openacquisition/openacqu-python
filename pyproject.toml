@@ -12,6 +12,7 @@ requires-python = ">=3.11"
 authors = [{ name = "openacquisition" }]
 dependencies = [
     "EasyMCP2221>=1.8.4",
+    "webcolors>=24.6.0",
 ]
 
 [project.optional-dependencies]

@@ -41,5 +41,5 @@ print("ADC resolution -> 16-bit")
 tc.adc_resolution = AdcResolution.BITS_16
 print(tc.adc_resolution)
 print()
-print("LED green pulse")
-probe.led.set_rgb(0, 64, 0)
+print("LED named color (lime @ 40% CIE L*)")
+print(probe.led.set_color("lime", brightness=0.4))

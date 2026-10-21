@@ -12,7 +12,8 @@ from openacqu import ProbeTemp1
 probe = ProbeTemp1()
 print(probe.product_number)          # 0x01 on the temperature probe
 print(probe.eeprom.eui48_str)
-probe.led.set_rgb(0, 32, 0)
+probe.led.set_color("lime", brightness=0.4)  # CSS name → LED PWM profile
+probe.led.set_rgb(0, 32, 0)                  # raw PWM still available
 print(probe.temperature_c)
 ```
 
@@ -32,6 +33,8 @@ openacqu info
 openacqu product
 openacqu eui48
 openacqu led set 0 64 0
+openacqu led color orange --brightness 0.5
+openacqu led colors
 openacqu led off
 openacqu temp read
 openacqu temp status
@@ -59,7 +62,7 @@ Hardware-in-the-loop scripts also live under `examples/`.
 
 | Chip | Role | I2C (schematic) |
 | --- | --- | --- |
-| LP5817 | RGB LED driver | `0x2D` |
+| LP5817 | RGB LED driver (+ CSS colors / CIE L* dimming) | `0x2D` |
 | 24AA025E48 | EEPROM + EUI-48 | `0x50` (A0=A1=GND) |
 | FXL6408 | Product number (read-only) | `0x43` (ADDR=GND); `0x01` = temp probe |
 | MCP9600 | Thermocouple (ProbeTemp1) | `0x67` |
