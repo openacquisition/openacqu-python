@@ -9,12 +9,12 @@ model-specific sensor chips on that bus.
 ```python
 from openacqu import ProbeTemp1
 
-probe = ProbeTemp1()
-print(probe.product_number)          # 0x01 on the temperature probe
-print(probe.eeprom.eui48_str)
-probe.led.set_color("lime", brightness=0.4)  # CSS name → LED PWM profile
-probe.led.set_rgb(0, 32, 0)                  # raw PWM still available
-print(probe.temperature_c)
+with ProbeTemp1() as probe:  # always release HID (USBCFG may gate sensor power)
+    print(probe.product_number)          # 0x01 on the temperature probe
+    print(probe.eeprom.eui48_str)
+    probe.led.set_color("lime", brightness=0.4)  # CSS name → LED PWM profile
+    probe.led.set_rgb(0, 32, 0)                  # raw PWM still available
+    print(probe.temperature_c)
 ```
 
 ## Install

@@ -1,22 +1,28 @@
 """EasyMCP2221-backed I2C bus adapter.
 
-USB note
---------
+USB / load-switch note
+----------------------
 MCP2221A GP2 factory-default function is ``USBCFG``. Per the datasheet that
 pin is low at reset, goes high after USB configuration, then goes **low again
-in USB Suspend** and high on Resume. A brief high pulse on plug-in with no
-userspace handle open is usually host autosuspend, not a pin-mux fault.
+in USB Suspend** and high on Resume.
 
-Keeping an open HID handle (this bus) for the probe session is the primary
-software control. Optional :meth:`start_keepalive` issues periodic HID traffic
-to further discourage selective suspend. Host policy (udev / Windows power
-settings) may still be required — see ``docs/usb.md``.
+On Open Acquisition hardware, USBCFG often gates a load switch that powers
+I2C sensors. So:
+
+* Opening a HID handle should Resume the device → USBCFG high → rail on
+* Closing / autosuspend → USBCFG low → sensors unpowered (I2C NAK)
+* After open there can be a short delay before the switched rail is stable
+
+EasyMCP2221 only closes the HID device in ``Device.__del__``. We explicitly
+release ``hidhandler`` in :meth:`close` so scripts can open/close repeatedly
+without relying on GC. See ``docs/usb.md``.
 """
 
 from __future__ import annotations
 
 import threading
 import time
+from types import TracebackType
 from typing import Any
 
 from openacqu.transport.base import I2CDevice
@@ -24,6 +30,9 @@ from openacqu.transport.base import I2CDevice
 # Microchip MCP2221 / MCP2221A
 USB_VID = 0x04D8
 USB_PID = 0x00DD
+
+# Default pause after HID open/ping so a USBCFG-gated load switch can rise.
+DEFAULT_SETTLE_S = 0.05
 
 
 class MCP2221Device:
@@ -55,6 +64,8 @@ class MCP2221Bus:
     @property
     def raw(self) -> Any:
         """Underlying EasyMCP2221 device (GPIO/ADC/DAC later)."""
+        if self._closed or self._device is None:
+            raise RuntimeError("MCP2221Bus is closed")
         return self._device
 
     @property
@@ -62,31 +73,65 @@ class MCP2221Bus:
         return self._keepalive_thread is not None and self._keepalive_thread.is_alive()
 
     def device(self, address: int, *, reg_bytes: int = 1) -> I2CDevice:
-        slave = self._device.I2C_Slave(address, reg_bytes=reg_bytes)
+        slave = self.raw.I2C_Slave(address, reg_bytes=reg_bytes, force=True)
         return MCP2221Device(slave)
 
     def ping(self) -> None:
-        """Issue a cheap HID transaction to discourage USB selective suspend."""
-        # Prefer a lightweight SRAM/GPIO touch; fall back to flash info.
-        gpio_read = getattr(self._device, "GPIO_read", None)
+        """Issue a cheap HID transaction (Resume + discourage selective suspend)."""
+        device = self.raw
+        gpio_read = getattr(device, "GPIO_read", None)
         if callable(gpio_read):
             gpio_read()
             return
-        read_flash = getattr(self._device, "read_flash_info", None)
+        read_flash = getattr(device, "read_flash_info", None)
         if callable(read_flash):
             read_flash()
             return
-        # Last resort: stringifying the device often triggers status reads.
-        str(self._device)
+        str(device)
+
+    def ensure_active(self, *, settle_s: float = DEFAULT_SETTLE_S) -> None:
+        """Touch HID (host Resume) then wait for a USBCFG-gated rail to settle."""
+        self.ping()
+        if settle_s > 0:
+            time.sleep(settle_s)
+
+    def i2c_ack(self, address: int) -> bool:
+        """Return True if a slave ACKs at ``address`` (1-byte read probe)."""
+        device = self.raw
+        try:
+            # force=True: do not raise in I2C_Slave.__init__ when absent.
+            slave = device.I2C_Slave(address, reg_bytes=1, force=True)
+            return bool(slave.is_present())
+        except Exception:
+            return False
+
+    def wait_for_i2c(
+        self,
+        address: int,
+        *,
+        timeout_s: float = 2.0,
+        poll_s: float = 0.05,
+    ) -> None:
+        """Poll until ``address`` ACKs or raise ``TimeoutError``.
+
+        Useful after open/resume while a USBCFG load switch powers sensors.
+        """
+        if timeout_s <= 0:
+            raise ValueError("timeout_s must be > 0")
+        if poll_s <= 0:
+            raise ValueError("poll_s must be > 0")
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.i2c_ack(address):
+                return
+            time.sleep(poll_s)
+        raise TimeoutError(
+            f"no I2C ACK from 0x{address:02X} within {timeout_s:.3f}s "
+            "(device may still be suspended or USBCFG load-switch rail not up)"
+        )
 
     def start_keepalive(self, interval_s: float = 1.0) -> None:
-        """Start a background thread that periodically calls :meth:`ping`.
-
-        Parameters
-        ----------
-        interval_s:
-            Seconds between HID pings. Must be > 0.
-        """
+        """Start a background thread that periodically calls :meth:`ping`."""
         if interval_s <= 0:
             raise ValueError("keepalive interval_s must be > 0")
         self.stop_keepalive()
@@ -96,9 +141,9 @@ class MCP2221Bus:
         def _loop() -> None:
             while not self._keepalive_stop.wait(interval_s):
                 try:
-                    self.ping()
+                    if not self._closed:
+                        self.ping()
                 except Exception:
-                    # Keep trying; a transient USB glitch should not kill the thread.
                     pass
 
         self._keepalive_thread = threading.Thread(
@@ -122,21 +167,24 @@ class MCP2221Bus:
         status: dict[str, Any] = {
             "vid": f"0x{USB_VID:04X}",
             "pid": f"0x{USB_PID:04X}",
-            "handle_open": not self._closed,
+            "handle_open": not self._closed and self._device is not None,
             "keepalive_active": self.keepalive_active,
             "keepalive_interval_s": self._keepalive_interval_s,
             "usbcfg_note": (
                 "GP2 USBCFG is high only while USB-configured and not suspended; "
-                "low during Suspend is expected without an active host session."
+                "low during Suspend is expected without an active host session. "
+                "If USBCFG gates a load switch, I2C NAKs after reopen usually mean "
+                "Resume/settle did not complete before the first transaction."
             ),
         }
+        if self._closed or self._device is None:
+            return status
         read_flash = getattr(self._device, "read_flash_info", None)
         if callable(read_flash):
             try:
                 status["flash"] = read_flash()
             except Exception as exc:  # pragma: no cover - hardware-specific
                 status["flash_error"] = str(exc)
-        # EasyMCP2221 Device often stringifies to a useful settings dump.
         try:
             status["device"] = str(self._device)
         except Exception as exc:  # pragma: no cover
@@ -144,22 +192,79 @@ class MCP2221Bus:
         return status
 
     def close(self) -> None:
-        """Stop keep-alive and release the underlying device if possible."""
+        """Stop keep-alive and explicitly release the HID handle.
+
+        EasyMCP2221 only closes ``hidhandler`` in ``Device.__del__``. Calling
+        this makes repeated script runs deterministic without waiting for GC.
+        """
+        if self._closed:
+            return
         self.stop_keepalive()
         self._closed = True
-        close = getattr(self._device, "close", None)
+        device = self._device
+        self._device = None
+        if device is None:
+            return
+        # Prefer an explicit close() if a future EasyMCP2221 adds one.
+        close = getattr(device, "close", None)
         if callable(close):
-            close()
+            try:
+                close()
+                return
+            except Exception:
+                pass
+        # Mirror EasyMCP2221.Device.__del__
+        hidhandler = getattr(device, "hidhandler", None)
+        if hidhandler is not None:
+            try:
+                hidhandler.close()
+            except Exception:
+                pass
+            try:
+                delattr(device, "hidhandler")
+            except Exception:
+                pass
+
+    def __enter__(self) -> MCP2221Bus:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
 
 
-def open_mcp2221_bus(*, keepalive_s: float | None = None) -> MCP2221Bus:
+def open_mcp2221_bus(
+    *,
+    keepalive_s: float | None = None,
+    settle_s: float = DEFAULT_SETTLE_S,
+    ready_address: int | None = None,
+    ready_timeout_s: float = 2.0,
+) -> MCP2221Bus:
     """Open the first available MCP2221/MCP2221A and return an I2C bus.
 
     Parameters
     ----------
     keepalive_s:
         If set, start a background HID keep-alive at this interval (seconds).
+    settle_s:
+        Delay after the first HID ping for USBCFG/load-switch rail rise.
+    ready_address:
+        If set, poll this I2C address until ACK (or ``ready_timeout_s``).
+    ready_timeout_s:
+        Timeout for ``ready_address`` polling.
     """
     import EasyMCP2221
 
-    return MCP2221Bus(EasyMCP2221.Device(), keepalive_s=keepalive_s)
+    bus = MCP2221Bus(EasyMCP2221.Device(), keepalive_s=keepalive_s)
+    try:
+        bus.ensure_active(settle_s=settle_s)
+        if ready_address is not None:
+            bus.wait_for_i2c(ready_address, timeout_s=ready_timeout_s)
+    except Exception:
+        bus.close()
+        raise
+    return bus

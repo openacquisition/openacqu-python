@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from types import TracebackType
+from typing import TypeVar
+
 from openacqu.chips.eeprom_24aa025e48 import EEPROM24AA025E48
 from openacqu.chips.fxl6408 import FXL6408
 from openacqu.chips.lp5817 import LP5817
 from openacqu.product import ProductNumber
 from openacqu.transport.base import I2CBus
+
+ProbeT = TypeVar("ProbeT", bound="Probe")
 
 
 class Probe:
@@ -18,6 +23,9 @@ class Probe:
     * LP5817 RGB LED driver
     * 24AA025E48 EEPROM (EUI-48 + user storage)
     * FXL6408 GPIO expander encoding the product number (read-only)
+
+    Prefer ``with ProbeTemp1() as probe:`` so the HID handle is released even
+    if the script exits early (important when USBCFG gates peripheral power).
     """
 
     #: Subclasses set this to the product number they expect on the expander.
@@ -25,6 +33,7 @@ class Probe:
 
     def __init__(self, bus: I2CBus) -> None:
         self._bus = bus
+        self._closed = False
         self.led = LP5817(bus)
         self.eeprom = EEPROM24AA025E48(bus)
         self.gpio_expander = FXL6408(bus)
@@ -58,6 +67,20 @@ class Probe:
 
     def close(self) -> None:
         """Release transport resources if the bus supports it."""
+        if self._closed:
+            return
+        self._closed = True
         close = getattr(self._bus, "close", None)
         if callable(close):
             close()
+
+    def __enter__(self: ProbeT) -> ProbeT:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
