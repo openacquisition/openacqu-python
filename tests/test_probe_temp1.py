@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from openacqu import ProbeTemp1
 from openacqu.chips.mcp9600 import ThermocoupleType
 from openacqu.transport.fake import FakeI2CBus
@@ -27,12 +25,6 @@ def test_probe_temp1_custom_address() -> None:
     probe = ProbeTemp1(bus, mcp9600_address=0x60)
     assert probe.thermocouple.address == 0x60
     assert probe.temperature_c == 4.0
-
-
-def test_hardware_revision_stub() -> None:
-    probe = ProbeTemp1(FakeI2CBus())
-    with pytest.raises(NotImplementedError):
-        probe.hardware_revision()
 
 
 def test_configure_thermocouple_via_model() -> None:

@@ -10,7 +10,10 @@ model-specific sensor chips on that bus.
 from openacqu import ProbeTemp1
 
 probe = ProbeTemp1()
-print(probe.thermocouple.hot_junction_c)
+print(probe.product_number)          # 0x01 on the temperature probe
+print(probe.eeprom.eui48_str)
+probe.led.set_rgb(0, 32, 0)
+print(probe.temperature_c)
 ```
 
 ## Install
@@ -29,8 +32,17 @@ pytest
 
 Hardware-in-the-loop scripts live under `examples/`.
 
+## Core peripherals
+
+| Chip | Role | I2C (schematic) |
+| --- | --- | --- |
+| LP5817 | RGB LED driver | `0x2D` |
+| 24AA025E48 | EEPROM + EUI-48 | `0x50` (A0=A1=GND) |
+| FXL6408 | Product number (read-only) | `0x43` (ADDR=GND); `0x01` = temp probe |
+| MCP9600 | Thermocouple (ProbeTemp1) | `0x67` |
+
 ## Status
 
-Early refactor: transport abstraction, MCP9600 thermocouple support, and
-`ProbeTemp1`. Shared core peripherals (LED driver, EEPROM, GPIO expander /
-hardware revision) and additional sensors (pH, etc.) come next.
+Transport abstraction, shared core peripherals, MCP9600 / `ProbeTemp1`, and
+offline unit tests are in place. Optional CLI test harness and additional
+sensors (pH, etc.) come next.

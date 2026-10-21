@@ -1,43 +1,60 @@
-"""Shared probe model base.
-
-All Open Acquisition models share an MCP2221A bridge plus core peripherals
-(LED driver, EEPROM, GPIO expander used for hardware revision). Those
-peripherals are stubbed here and will be enabled after the initial refactor.
-"""
+"""Shared probe model base with core I2C peripherals."""
 
 from __future__ import annotations
 
+from openacqu.chips.eeprom_24aa025e48 import EEPROM24AA025E48
+from openacqu.chips.fxl6408 import FXL6408
+from openacqu.chips.lp5817 import LP5817
+from openacqu.product import ProductNumber
 from openacqu.transport.base import I2CBus
 
 
 class Probe:
     """Base class for product models.
 
-    Subclasses receive an :class:`~openacqu.transport.base.I2CBus` and attach
-    model-specific sensor drivers. Shared core peripherals will hang off this
-    class once implemented.
+    Every Open Acquisition probe shares:
+
+    * MCP2221A USB↔I2C bridge (injected as ``bus``)
+    * LP5817 RGB LED driver
+    * 24AA025E48 EEPROM (EUI-48 + user storage)
+    * FXL6408 GPIO expander encoding the product number (read-only)
     """
+
+    #: Subclasses set this to the product number they expect on the expander.
+    EXPECTED_PRODUCT: ProductNumber | int | None = None
 
     def __init__(self, bus: I2CBus) -> None:
         self._bus = bus
-        # Future core peripherals (not yet implemented):
-        # self._led = ...
-        # self._eeprom = ...
-        # self._gpio_expander = ...
+        self.led = LP5817(bus)
+        self.eeprom = EEPROM24AA025E48(bus)
+        self.gpio_expander = FXL6408(bus)
 
     @property
     def bus(self) -> I2CBus:
         """I2C bus used by this probe."""
         return self._bus
 
-    def hardware_revision(self) -> int:
-        """Read the hardware revision via the GPIO expander.
+    @property
+    def product_number(self) -> int:
+        """8-bit product number from the GPIO expander (read-only)."""
+        return self.gpio_expander.product_number
 
-        Not implemented yet; reserved so model APIs can grow in one place.
+    def require_product(self, expected: ProductNumber | int | None = None) -> int:
+        """Read the product number and raise if it does not match ``expected``.
+
+        When ``expected`` is omitted, uses the subclass ``EXPECTED_PRODUCT``.
         """
-        raise NotImplementedError(
-            "GPIO expander hardware-revision support is not implemented yet"
-        )
+        if expected is None:
+            expected = self.EXPECTED_PRODUCT
+        if expected is None:
+            raise ValueError("no expected product number provided")
+        actual = self.product_number
+        if actual != int(expected):
+            raise LookupError(
+                f"product number mismatch: expected 0x{int(expected):02X}, "
+                f"found 0x{actual:02X}"
+            )
+        return actual
 
     def close(self) -> None:
         """Release transport resources if the bus supports it."""
