@@ -1,2 +1,5 @@
-EasyMCP2221==1.8.4
-hidapi==0.15.0
+# Prefer: pip install -e ".[dev]"
+# This file is kept as a convenience pin for environments that still use
+# requirements.txt. Runtime dependency is declared in pyproject.toml.
+EasyMCP2221>=1.8.4
+webcolors>=24.6.0

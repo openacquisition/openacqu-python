@@ -14,7 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Do not ignore a top-level package named lib/ if reintroduced; the stock
+# Python gitignore entry for virtualenv "lib/" is omitted intentionally.
 lib64/
 parts/
 sdist/
