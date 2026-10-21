@@ -17,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[project.scripts]
+openacqu = "openacqu.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["openacqu*"]
 

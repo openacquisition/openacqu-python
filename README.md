@@ -22,6 +22,29 @@ print(probe.temperature_c)
 pip install -e ".[dev]"
 ```
 
+## CLI test harness
+
+The library is the primary API. The `openacqu` CLI mirrors model features for
+hardware bring-up:
+
+```bash
+openacqu info
+openacqu product
+openacqu eui48
+openacqu led set 0 64 0
+openacqu led off
+openacqu temp read
+openacqu temp status
+openacqu temp type K
+openacqu temp filter 0
+openacqu temp resolution 16
+openacqu temp identify
+openacqu eeprom read 0xFA 6
+```
+
+Also: `python -m openacqu ...`. Use `--check-product` to require product `0x01`
+on ProbeTemp1.
+
 ## Tests
 
 Unit tests use a fake I2C bus and do not require hardware:
@@ -30,7 +53,7 @@ Unit tests use a fake I2C bus and do not require hardware:
 pytest
 ```
 
-Hardware-in-the-loop scripts live under `examples/`.
+Hardware-in-the-loop scripts also live under `examples/`.
 
 ## Core peripherals
 
