@@ -9,6 +9,17 @@ from openacqu.transport.base import I2CBus
 from openacqu.transport.mcp2221 import open_mcp2221_bus
 
 
+def _keepalive_interval(keepalive: bool | float) -> float | None:
+    if keepalive is False:
+        return None
+    if keepalive is True:
+        return 1.0
+    interval = float(keepalive)
+    if interval <= 0:
+        raise ValueError("keepalive interval must be > 0")
+    return interval
+
+
 class ProbeTemp1(Probe):
     """Temperature probe built around an MCP9600 thermocouple converter.
 
@@ -23,6 +34,10 @@ class ProbeTemp1(Probe):
         7-bit I2C address of the MCP9600 (depends on ADDR pins; default 0x67).
     check_product:
         When true, verify the GPIO expander product number is ``0x01``.
+    keepalive:
+        When opening a real MCP2221 bus: ``True`` enables a 1.0 s HID keep-alive,
+        or pass a positive interval in seconds. Helps keep USBCFG high by
+        discouraging host USB Suspend while the probe is open.
     """
 
     EXPECTED_PRODUCT = ProductNumber.TEMPERATURE
@@ -33,8 +48,15 @@ class ProbeTemp1(Probe):
         *,
         mcp9600_address: int = DEFAULT_ADDRESS,
         check_product: bool = False,
+        keepalive: bool | float = False,
     ) -> None:
-        super().__init__(bus if bus is not None else open_mcp2221_bus())
+        if bus is None:
+            bus = open_mcp2221_bus(keepalive_s=_keepalive_interval(keepalive))
+        elif keepalive:
+            start = getattr(bus, "start_keepalive", None)
+            if callable(start):
+                start(_keepalive_interval(keepalive) or 1.0)
+        super().__init__(bus)
         self.thermocouple = MCP9600(self.bus, address=mcp9600_address)
         if check_product:
             self.require_product()

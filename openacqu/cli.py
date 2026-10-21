@@ -7,12 +7,16 @@ during bring-up and verification.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import time
 from collections.abc import Sequence
+from typing import Any
 
 from openacqu import ProbeTemp1, ProductNumber, __version__
 from openacqu.chips.mcp9600 import AdcResolution, ThermocoupleType
 from openacqu.transport.base import I2CBus
+from openacqu.transport.mcp2221 import MCP2221Bus, open_mcp2221_bus
 
 _ADC_BY_BITS = {
     18: AdcResolution.BITS_18,
@@ -33,8 +37,32 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="require GPIO expander product number to match the selected model",
     )
+    parser.add_argument(
+        "--keepalive",
+        nargs="?",
+        const=1.0,
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "enable MCP2221A HID keep-alive while the command runs "
+            "(optional interval, default 1.0s); helps keep USBCFG high"
+        ),
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
+
+    usb = sub.add_parser(
+        "usb",
+        help="MCP2221A USB diagnostics (USBCFG / suspend bring-up)",
+    )
+    usb.add_argument(
+        "--hold",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="keep the USB handle open this many seconds (for scoping USBCFG)",
+    )
 
     sub.add_parser("info", help="show product number, EUI-48, and MCP9600 identity")
 
@@ -118,8 +146,18 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _keepalive_arg(args: argparse.Namespace) -> bool | float:
+    if args.keepalive is None:
+        return False
+    return args.keepalive
+
+
 def _open_probe(args: argparse.Namespace, bus: I2CBus | None) -> ProbeTemp1:
-    return ProbeTemp1(bus, check_product=args.check_product)
+    return ProbeTemp1(
+        bus,
+        check_product=args.check_product,
+        keepalive=_keepalive_arg(args),
+    )
 
 
 def _parse_hex_bytes(text: str) -> bytes:
@@ -129,7 +167,61 @@ def _parse_hex_bytes(text: str) -> bytes:
     return bytes.fromhex(cleaned)
 
 
+def _print_usb_status(status: dict[str, Any]) -> None:
+    for key in (
+        "vid",
+        "pid",
+        "handle_open",
+        "keepalive_active",
+        "keepalive_interval_s",
+        "usbcfg_note",
+    ):
+        if key in status:
+            print(f"{key}: {status[key]}")
+    if "flash" in status:
+        print("flash:")
+        print(json.dumps(status["flash"], indent=2, default=str))
+    if "flash_error" in status:
+        print(f"flash_error: {status['flash_error']}")
+    if "device" in status:
+        print("device:")
+        print(status["device"])
+    if "device_error" in status:
+        print(f"device_error: {status['device_error']}")
+
+
+def _run_usb(args: argparse.Namespace, bus: I2CBus | None) -> int:
+    owned = False
+    keepalive = _keepalive_arg(args)
+    if bus is None:
+        interval = keepalive if keepalive is not False else None
+        if interval is True:
+            interval = 1.0
+        bus = open_mcp2221_bus(keepalive_s=interval if interval else None)
+        owned = True
+    elif keepalive and isinstance(bus, MCP2221Bus):
+        bus.start_keepalive(float(keepalive) if keepalive is not True else 1.0)
+
+    try:
+        status_fn = getattr(bus, "usb_status", None)
+        if not callable(status_fn):
+            raise TypeError("injected bus does not support usb_status()")
+        _print_usb_status(status_fn())
+        if args.hold > 0:
+            print(f"holding USB handle open for {args.hold:g}s (scope USBCFG)...", flush=True)
+            time.sleep(args.hold)
+            print("hold complete")
+        return 0
+    finally:
+        if owned:
+            close = getattr(bus, "close", None)
+            if callable(close):
+                close()
+
+
 def _run(args: argparse.Namespace, bus: I2CBus | None) -> int:
+    if args.command == "usb":
+        return _run_usb(args, bus)
     probe = _open_probe(args, bus)
     try:
         return _dispatch(args, probe)

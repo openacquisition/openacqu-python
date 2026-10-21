@@ -44,3 +44,6 @@ class FakeI2CBus:
         if reg_bytes != 1:
             raise NotImplementedError("FakeI2CBus currently supports reg_bytes=1 only")
         return FakeI2CDevice(self.memory(address), default=self._default)
+
+    def close(self) -> None:
+        """No-op for API parity with :class:`~openacqu.transport.mcp2221.MCP2221Bus`."""

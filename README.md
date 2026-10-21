@@ -29,6 +29,8 @@ The library is the primary API. The `openacqu` CLI mirrors model features for
 hardware bring-up:
 
 ```bash
+openacqu usb
+openacqu usb --keepalive --hold 30
 openacqu info
 openacqu product
 openacqu eui48
@@ -46,7 +48,10 @@ openacqu eeprom read 0xFA 6
 ```
 
 Also: `python -m openacqu ...`. Use `--check-product` to require product `0x01`
-on ProbeTemp1.
+on ProbeTemp1. Use `--keepalive` to keep HID traffic alive (helps USBCFG stay high).
+
+See [docs/usb.md](docs/usb.md) for MCP2221A USBCFG / USB Suspend notes and host
+autosuspend setup.
 
 ## Tests
 
