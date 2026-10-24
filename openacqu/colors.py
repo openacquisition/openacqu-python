@@ -77,6 +77,36 @@ PROBE_RGB_PROFILE = LedColorProfile(
 
 DEFAULT_PROFILE = PROBE_RGB_PROFILE
 
+# Indicator hues, in cycle order. Green is full-scale #00ff00 (CSS "green" is
+# #008000 and comes out very dim).
+INDICATOR_COLORS: tuple[tuple[str, str], ...] = (
+    ("red", "#ff0000"),
+    ("yellow", "#ffff00"),
+    ("green", "#00ff00"),
+    ("blue", "#0000ff"),
+    ("magenta", "#ff00ff"),
+    ("white", "#ffffff"),
+)
+
+
+def indicator_sequence(start: str | None = None) -> tuple[tuple[str, str], ...]:
+    """Return :data:`INDICATOR_COLORS`, rotated so ``start`` is first.
+
+    ``start`` is a palette name. The default sequence begins at red. Every
+    color is still included once.
+    """
+    if start is None:
+        return INDICATOR_COLORS
+    key = start.strip().lower()
+    names = [name for name, _color in INDICATOR_COLORS]
+    try:
+        index = names.index(key)
+    except ValueError as exc:
+        raise ValueError(
+            f"unknown indicator color {start!r}; choose from {', '.join(names)}"
+        ) from exc
+    return INDICATOR_COLORS[index:] + INDICATOR_COLORS[:index]
+
 
 def named_colors() -> list[str]:
     """CSS3 color names supported by ``webcolors`` (lowercase, sorted)."""
@@ -137,6 +167,31 @@ def brightness_to_scale(brightness: float, mode: PerceptualMode) -> float:
     raise ValueError(f"unsupported perceptual mode: {mode!r}")
 
 
+def _linear_srgb(color: str) -> tuple[float, float, float]:
+    red, green, blue = parse_color(color)
+    return (
+        srgb_to_linear(red / 255.0),
+        srgb_to_linear(green / 255.0),
+        srgb_to_linear(blue / 255.0),
+    )
+
+
+def _pwm_from_linear(
+    linear: tuple[float, float, float],
+    *,
+    brightness: float,
+    profile: LedColorProfile,
+) -> tuple[int, int, int]:
+    """Apply LED gains and the brightness scale, then quantize to PWM."""
+    scale = brightness_to_scale(brightness, profile.perceptual)
+    gains = (profile.red_gain, profile.green_gain, profile.blue_gain)
+    pwm: list[int] = []
+    for channel, gain in zip(linear, gains, strict=True):
+        level = channel * gain * scale * 255.0
+        pwm.append(max(0, min(255, int(round(level)))))
+    return pwm[0], pwm[1], pwm[2]
+
+
 def resolve_to_pwm(
     color: str | Iterable[int],
     *,
@@ -144,12 +199,48 @@ def resolve_to_pwm(
     profile: LedColorProfile = DEFAULT_PROFILE,
 ) -> tuple[int, int, int]:
     """Resolve a named/hex/RGB color to 8-bit LED PWM using ``profile``."""
-    r_s, g_s, b_s = parse_color(color)
-    scale = brightness_to_scale(brightness, profile.perceptual)
-    gains = (profile.red_gain, profile.green_gain, profile.blue_gain)
+    if isinstance(color, str):
+        linear = _linear_srgb(color)
+    else:
+        red, green, blue = parse_color(color)
+        linear = (
+            srgb_to_linear(red / 255.0),
+            srgb_to_linear(green / 255.0),
+            srgb_to_linear(blue / 255.0),
+        )
+    return _pwm_from_linear(linear, brightness=brightness, profile=profile)
 
-    pwm: list[int] = []
-    for srgb8, gain in zip((r_s, g_s, b_s), gains, strict=True):
-        linear = srgb_to_linear(srgb8 / 255.0) * gain * scale
-        pwm.append(max(0, min(255, int(round(linear * 255.0)))))
-    return pwm[0], pwm[1], pwm[2]
+
+def _indicator_linear() -> dict[str, tuple[float, float, float]]:
+    """Scale each indicator so the sum of its linear channels matches a primary.
+
+    After the LED gains, luminous intensity is proportional to that sum: the
+    gains cancel the per-die mcd, and the mcd figures already include the
+    photopic eye response. Primaries sum to 1 and are left alone. White sums
+    to 3 and is scaled by 1/3. Chromaticity is preserved.
+    """
+    raw = {name: _linear_srgb(color) for name, color in INDICATOR_COLORS}
+    target = min(sum(channels) for channels in raw.values())
+    return {
+        name: tuple(channel * target / sum(channels) for channel in channels)
+        for name, channels in raw.items()
+    }
+
+
+_INDICATOR_LINEAR = _indicator_linear()
+
+
+def indicator_pwm(
+    name: str,
+    *,
+    brightness: float = 1.0,
+    profile: LedColorProfile = DEFAULT_PROFILE,
+) -> tuple[int, int, int]:
+    """PWM for one indicator color, matched in luminance to the others."""
+    key = name.strip().lower()
+    try:
+        linear = _INDICATOR_LINEAR[key]
+    except KeyError as exc:
+        names = ", ".join(color_name for color_name, _color in INDICATOR_COLORS)
+        raise ValueError(f"unknown indicator color {name!r}; choose from {names}") from exc
+    return _pwm_from_linear(linear, brightness=brightness, profile=profile)

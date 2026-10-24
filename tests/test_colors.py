@@ -5,11 +5,14 @@ from __future__ import annotations
 import pytest
 
 from openacqu.colors import (
+    INDICATOR_COLORS,
     PROBE_RGB_PROFILE,
     UNITY_PROFILE,
     LedColorProfile,
     PerceptualMode,
     brightness_to_scale,
+    indicator_pwm,
+    indicator_sequence,
     lightness_to_luminance,
     named_colors,
     parse_color,
@@ -69,6 +72,51 @@ def test_lp5817_set_color() -> None:
     assert led.get_pwm() == (0, 0, 255)
     led.set_color("#ff0000", brightness=0.0)
     assert led.get_pwm() == (0, 0, 0)
+
+
+def test_indicator_sequence_rotates_and_keeps_every_color() -> None:
+    assert [name for name, _color in indicator_sequence()] == [
+        "red",
+        "yellow",
+        "green",
+        "blue",
+        "magenta",
+        "white",
+    ]
+    assert indicator_sequence()[2] == ("green", "#00ff00")
+    assert indicator_sequence()[1] == ("yellow", "#ffff00")
+    assert indicator_sequence()[4] == ("magenta", "#ff00ff")
+    rotated = indicator_sequence("Blue")
+    assert rotated[0][0] == "blue"
+    assert [name for name, _color in rotated] == [
+        "blue",
+        "magenta",
+        "white",
+        "red",
+        "yellow",
+        "green",
+    ]
+    assert len(rotated) == len(INDICATOR_COLORS)
+    with pytest.raises(ValueError, match="unknown indicator color"):
+        indicator_sequence("pink")
+
+
+def test_indicator_colors_match_luminance() -> None:
+    """Each indicator's gain-adjusted drive sums to the same luminous intensity."""
+    totals: list[float] = []
+    gains = (
+        PROBE_RGB_PROFILE.red_gain,
+        PROBE_RGB_PROFILE.green_gain,
+        PROBE_RGB_PROFILE.blue_gain,
+    )
+    for name, _color in INDICATOR_COLORS:
+        pwm = indicator_pwm(name, profile=PROBE_RGB_PROFILE)
+        totals.append(sum(channel / 255.0 / gain for channel, gain in zip(pwm, gains, strict=True)))
+    assert max(totals) - min(totals) < 0.03
+    # Primaries are the reference level, so red is unchanged by the match.
+    assert indicator_pwm("red") == resolve_to_pwm("#ff0000")
+    # White used to be about 3x a primary. The matched level is about 1x.
+    assert sum(indicator_pwm("white")) < sum(resolve_to_pwm("#ffffff")) / 2
 
 
 def test_unknown_color_raises() -> None:

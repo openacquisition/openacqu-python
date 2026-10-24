@@ -21,8 +21,10 @@ from openacqu.chips.eeprom_24aa025e48 import (
 from openacqu.chips.eeprom_24aa025e48 import (
     USER_MEMORY_SIZE,
 )
+from openacqu.chips.lp5817 import DEFAULT_ADDRESS as LED_ADDRESS
 from openacqu.chips.lmp91200 import PgaGain, VcmLevel, VocmSelect
 from openacqu.chips.mcp9600 import AdcResolution, ThermocoupleType
+from openacqu.colors import indicator_pwm, indicator_sequence
 from openacqu.transport.base import I2CBus
 from openacqu.transport.mcp2221 import MCP2221Bus, open_mcp2221_bus
 
@@ -120,6 +122,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="0..1 perceived brightness (CIE L* by default)",
     )
     led_sub.add_parser("colors", help="list CSS3 color names")
+    led_cycle = led_sub.add_parser(
+        "cycle",
+        help="cycle indicator colors, starting and ending with the LED off",
+    )
+    led_cycle.add_argument(
+        "--dwell",
+        type=float,
+        default=1.0,
+        metavar="SECONDS",
+        help="seconds to hold the off states and each color (default: 1)",
+    )
+    led_cycle.add_argument(
+        "--start",
+        default=None,
+        help=(
+            "indicator color to show first (red, yellow, green, "
+            "blue, magenta, white). The cycle still visits every color once"
+        ),
+    )
     led_sub.add_parser("off", help="turn LED off")
     led_sub.add_parser("get", help="read current PWM levels")
 
@@ -260,13 +281,14 @@ def _open_probe(args: argparse.Namespace, bus: I2CBus | None) -> Probe:
             check_product=args.check_product,
             keepalive=keepalive,
         )
-    # EEPROM commands must not wait on the thermocouple converter. That part
-    # can be absent or at another address while the user area is exercised.
-    if bus is None and args.command == "eeprom":
+    # Core peripherals must not wait on the thermocouple converter. That part
+    # can be absent or at another address while the LED or EEPROM is exercised.
+    ready_address = {"eeprom": EEPROM_ADDRESS, "led": LED_ADDRESS}.get(args.command)
+    if bus is None and ready_address is not None:
         interval = keepalive if isinstance(keepalive, float) else None
         bus = open_mcp2221_bus(
             keepalive_s=interval,
-            ready_address=EEPROM_ADDRESS,
+            ready_address=ready_address,
         )
         keepalive = False
     return ProbeTemp1(
@@ -365,6 +387,25 @@ def _run(args: argparse.Namespace, bus: I2CBus | None) -> int:
         probe.close()
 
 
+def _run_led_cycle(args: argparse.Namespace, probe: Probe) -> int:
+    """Hold off, each indicator color, and off again for ``--dwell`` seconds."""
+    if args.dwell <= 0:
+        raise ValueError("dwell must be > 0")
+    sequence = indicator_sequence(args.start)
+    probe.led.off()
+    print("off", flush=True)
+    time.sleep(args.dwell)
+    for name, color in sequence:
+        pwm = indicator_pwm(name)
+        probe.led.set_pwm(*pwm)
+        print(f"{name} {color} -> {pwm[0]} {pwm[1]} {pwm[2]}", flush=True)
+        time.sleep(args.dwell)
+    probe.led.off()
+    print("off", flush=True)
+    time.sleep(args.dwell)
+    return 0
+
+
 def _dispatch(args: argparse.Namespace, probe: Probe) -> int:
     cmd = args.command
 
@@ -410,6 +451,8 @@ def _dispatch(args: argparse.Namespace, probe: Probe) -> int:
 
             print("\n".join(named_colors()))
             return 0
+        if args.led_command == "cycle":
+            return _run_led_cycle(args, probe)
         if args.led_command == "off":
             probe.led.off()
             print("off")

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from openacqu.chips.eeprom_24aa025e48 import EUI48_OFFSET, USER_MEMORY_SIZE, EEPROM24AA025E48
+from openacqu.chips.lp5817 import LP5817
+from openacqu.colors import INDICATOR_COLORS, indicator_pwm
 from openacqu.chips.fxl6408 import DEFAULT_ADDRESS as FXL_ADDR
 from openacqu.chips.mcp9600 import EXPECTED_DEVICE_ID
 from openacqu.chips.sc18is606 import DEFAULT_ADDRESS as BRIDGE_ADDR
@@ -77,6 +79,62 @@ def test_cli_led_and_identify(capsys) -> None:
 
     assert main(["temp", "identify"], bus=bus) == 0
     assert capsys.readouterr().out.strip() == "0x40 0x10 (1.0)"
+
+
+def test_cli_led_cycle_dwells_and_ends_off(capsys, monkeypatch) -> None:
+    sleeps: list[float] = []
+    calls: list[tuple] = []
+    monkeypatch.setattr("openacqu.cli.time.sleep", lambda seconds: sleeps.append(seconds))
+    original_set = LP5817.set_pwm
+    original_off = LP5817.off
+
+    def set_pwm(self, red, green, blue):
+        calls.append(("pwm", (red, green, blue)))
+        return original_set(self, red, green, blue)
+
+    def off(self):
+        calls.append(("off",))
+        return original_off(self)
+
+    monkeypatch.setattr(LP5817, "set_pwm", set_pwm)
+    monkeypatch.setattr(LP5817, "off", off)
+    bus = _bus_with_temp_probe()
+    assert main(["led", "cycle", "--dwell", "0.25"], bus=bus) == 0
+    assert calls[0] == ("off",)
+    assert calls[-2] == ("off",)
+    assert [item[1] for item in calls if item[0] == "pwm" and item[1] != (0, 0, 0)] == [
+        indicator_pwm(name) for name, _color in INDICATOR_COLORS
+    ]
+    assert sleeps == [0.25] * (len(INDICATOR_COLORS) + 2)
+    assert bus.memory(0x2D)[0x18:0x1B] == bytes([0, 0, 0])
+    out = capsys.readouterr().out
+    assert out.startswith("off\n")
+    assert "green #00ff00 ->" in out
+    assert out.endswith("off\n")
+
+
+def test_cli_led_cycle_start_and_bad_dwell(capsys, monkeypatch) -> None:
+    calls: list[tuple[int, int, int]] = []
+    monkeypatch.setattr("openacqu.cli.time.sleep", lambda _seconds: None)
+    original_set = LP5817.set_pwm
+
+    def set_pwm(self, red, green, blue):
+        calls.append((red, green, blue))
+        return original_set(self, red, green, blue)
+
+    monkeypatch.setattr(LP5817, "set_pwm", set_pwm)
+    bus = _bus_with_temp_probe()
+    assert main(["led", "cycle", "--start", "blue", "--dwell", "0.1"], bus=bus) == 0
+    names = [name for name, _color in INDICATOR_COLORS]
+    index = names.index("blue")
+    rotated = names[index:] + names[:index]
+    shown = [pwm for pwm in calls if pwm != (0, 0, 0)]
+    assert shown[0] == indicator_pwm("blue")
+    assert shown == [indicator_pwm(name) for name in rotated]
+    capsys.readouterr()
+    assert main(["led", "cycle", "--start", "pink"], bus=bus) == 1
+    assert "unknown indicator color" in capsys.readouterr().err
+    assert main(["led", "cycle", "--dwell", "0"], bus=bus) == 1
 
 
 def test_cli_eeprom_stress_refuses_without_yes(capsys, monkeypatch) -> None:
