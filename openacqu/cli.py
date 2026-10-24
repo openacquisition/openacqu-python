@@ -97,6 +97,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "Omit to read the level stored in flash"
         ),
     )
+    gp2 = usb_sub.add_parser(
+        "gp2",
+        help="drive GP2 as a GPIO output until reset or unplug",
+    )
+    gp2.add_argument(
+        "level",
+        nargs="?",
+        choices=("high", "low"),
+        default="high",
+        help="output level (default: high). Holds the switched rail on while USBCFG is unresolved",
+    )
 
     sub.add_parser("info", help="show product number, EUI-48, and MCP9600 identity")
 
@@ -354,6 +365,8 @@ def _run_usb(args: argparse.Namespace, bus: I2CBus | None) -> int:
     try:
         if getattr(args, "usb_command", None) == "usbcfg":
             return _run_usb_usbcfg(args, bus)
+        if getattr(args, "usb_command", None) == "gp2":
+            return _run_usb_gp2(args, bus)
         status_fn = getattr(bus, "usb_status", None)
         if not callable(status_fn):
             raise TypeError("injected bus does not support usb_status()")
@@ -368,6 +381,16 @@ def _run_usb(args: argparse.Namespace, bus: I2CBus | None) -> int:
             close = getattr(bus, "close", None)
             if callable(close):
                 close()
+
+
+def _run_usb_gp2(args: argparse.Namespace, bus: I2CBus) -> int:
+    if not isinstance(bus, MCP2221Bus):
+        raise TypeError("GP2 GPIO requires an MCP2221 bus")
+    level = bus.force_gp2_gpio(args.level)
+    print(f"gp2: {level}")
+    print("function: GPIO_OUT")
+    print("persists until reset or unplug")
+    return 0
 
 
 def _run_usb_usbcfg(args: argparse.Namespace, bus: I2CBus) -> int:

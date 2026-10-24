@@ -30,6 +30,7 @@ hardware bring-up:
 
 ```bash
 openacqu usb
+openacqu usb gp2
 openacqu usb --keepalive --hold 30
 openacqu info
 openacqu product

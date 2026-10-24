@@ -178,6 +178,52 @@ def test_flash_usbcfg_refuses_protected_chip() -> None:
     assert device.writes == []
 
 
+class _PinDevice(_FakeDevice):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pin_calls: list[dict] = []
+        self.saved = False
+
+    def set_pin_function(self, **kwargs: object) -> None:
+        self.pin_calls.append(kwargs)
+
+    def save_config(self) -> None:
+        self.saved = True
+
+
+def test_force_gp2_gpio_sets_sram_output() -> None:
+    device = _PinDevice()
+    bus = MCP2221Bus(device)
+    assert bus.force_gp2_gpio("high") == "high"
+    assert bus.force_gp2_gpio("low") == "low"
+    assert device.pin_calls == [
+        {"gp2": "GPIO_OUT", "out2": True},
+        {"gp2": "GPIO_OUT", "out2": False},
+    ]
+    assert device.saved is False
+
+
+def test_force_gp2_gpio_rejects_unknown_level() -> None:
+    bus = MCP2221Bus(_PinDevice())
+    with pytest.raises(ValueError, match="high or low"):
+        bus.force_gp2_gpio("on")
+
+
+def test_cli_usb_gp2(capsys) -> None:
+    device = _PinDevice()
+    bus = MCP2221Bus(device)
+    assert main(["usb", "gp2"], bus=bus) == 0
+    assert capsys.readouterr().out == (
+        "gp2: high\nfunction: GPIO_OUT\npersists until reset or unplug\n"
+    )
+    assert device.pin_calls == [{"gp2": "GPIO_OUT", "out2": True}]
+    assert device.saved is False
+
+    assert main(["usb", "gp2", "low"], bus=bus) == 0
+    assert device.pin_calls[-1] == {"gp2": "GPIO_OUT", "out2": False}
+    assert "gp2: low" in capsys.readouterr().out
+
+
 def test_cli_usb_usbcfg_read_and_flash(capsys) -> None:
     bus = MCP2221Bus(_FlashDevice())
     assert main(["usb", "usbcfg"], bus=bus) == 0

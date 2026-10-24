@@ -212,6 +212,17 @@ class MCP2221Bus:
             status["device_error"] = str(exc)
         return status
 
+    def force_gp2_gpio(self, level: str) -> str:
+        """Drive GP2 as a GPIO output. SRAM only; lasts until reset or unplug.
+
+        ``level`` is ``high`` or ``low``. This does not write flash, so the
+        factory USBCFG function returns on the next power cycle.
+        """
+        if level not in ("high", "low"):
+            raise ValueError("GP2 level must be high or low")
+        self.raw.set_pin_function(gp2="GPIO_OUT", out2=level == "high")
+        return level
+
     def usbcfg_active_level(self) -> str:
         """Return the flashed USBCFG level while USB is configured.
 
