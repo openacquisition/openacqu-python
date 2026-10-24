@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openacqu.chips.eeprom_24aa025e48 import EUI48_OFFSET
+from openacqu.chips.eeprom_24aa025e48 import EUI48_OFFSET, USER_MEMORY_SIZE, EEPROM24AA025E48
 from openacqu.chips.fxl6408 import DEFAULT_ADDRESS as FXL_ADDR
 from openacqu.chips.mcp9600 import EXPECTED_DEVICE_ID
 from openacqu.chips.sc18is606 import DEFAULT_ADDRESS as BRIDGE_ADDR
@@ -77,6 +77,31 @@ def test_cli_led_and_identify(capsys) -> None:
 
     assert main(["temp", "identify"], bus=bus) == 0
     assert capsys.readouterr().out.strip() == "0x40 0x10 (1.0)"
+
+
+def test_cli_eeprom_stress_refuses_without_yes(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(EEPROM24AA025E48, "write_cycle_s", 0)
+    bus = _bus_with_temp_probe()
+    bus.memory(0x50)[0x10] = 0x5A
+    assert main(["eeprom", "stress"], bus=bus) == 1
+    assert bus.memory(0x50)[0x10] == 0x5A
+    captured = capsys.readouterr()
+    assert "will be erased" in captured.out
+    assert "without --yes" in captured.err
+
+
+def test_cli_eeprom_stress_yes(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(EEPROM24AA025E48, "write_cycle_s", 0)
+    bus = _bus_with_temp_probe()
+    eui = bytes(bus.memory(0x50)[EUI48_OFFSET : EUI48_OFFSET + 6])
+    assert main(["eeprom", "stress", "--yes", "--seed", "1"], bus=bus) == 0
+    assert bus.memory(0x50)[:USER_MEMORY_SIZE] == bytes([0xFF]) * USER_MEMORY_SIZE
+    assert bytes(bus.memory(0x50)[EUI48_OFFSET : EUI48_OFFSET + 6]) == eui
+    out = capsys.readouterr().out
+    assert "will be erased" in out
+    assert "seed:  1" in out
+    assert "passed:" in out
+    assert "eui48 unchanged: 00-04-A3-11-22-33" in out
 
 
 def test_cli_eeprom_read_write(capsys) -> None:

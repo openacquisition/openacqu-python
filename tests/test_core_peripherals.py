@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from openacqu import ProbeTemp1, ProductNumber
-from openacqu.chips.eeprom_24aa025e48 import EUI48_OFFSET, EEPROM24AA025E48
+from openacqu.chips.eeprom_24aa025e48 import (
+    EUI48_OFFSET,
+    USER_MEMORY_SIZE,
+    EEPROM24AA025E48,
+)
 from openacqu.chips.fxl6408 import DEFAULT_ADDRESS as FXL_ADDR
 from openacqu.chips.fxl6408 import FXL6408
 from openacqu.chips.lp5817 import LP5817
@@ -31,6 +35,29 @@ def test_eeprom_eui48_and_user_read_write() -> None:
 
     eeprom.write(0x10, b"hi")
     assert eeprom.read(0x10, 2) == b"hi"
+
+
+def test_eeprom_page_split_and_user_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(EEPROM24AA025E48, "write_cycle_s", 0)
+    eeprom = EEPROM24AA025E48(FakeI2CBus())
+    payload = bytes(range(10))
+    eeprom.write(6, payload)
+    assert eeprom.read(6, 10) == payload
+    with pytest.raises(ValueError, match="user area"):
+        eeprom.write(0x7E, b"\x00\x00\x00")
+
+
+def test_eeprom_stress_user_erases_and_keeps_eui(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(EEPROM24AA025E48, "write_cycle_s", 0)
+    bus = FakeI2CBus()
+    eui = bytes([0x00, 0x04, 0xA3, 0x12, 0x34, 0x56])
+    bus.memory(0x50)[EUI48_OFFSET : EUI48_OFFSET + 6] = eui
+    bus.memory(0x50)[0x00] = 0x11
+    eeprom = EEPROM24AA025E48(bus)
+    pattern = bytes((index * 17) & 0xFF for index in range(USER_MEMORY_SIZE))
+    eeprom.stress_user(pattern)
+    assert eeprom.read(0, USER_MEMORY_SIZE) == bytes([0xFF]) * USER_MEMORY_SIZE
+    assert eeprom.eui48 == eui
 
 
 def test_lp5817_set_rgb() -> None:

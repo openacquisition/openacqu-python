@@ -8,12 +8,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 import time
 from collections.abc import Sequence
 from typing import Any
 
 from openacqu import Probe, ProbePh1, ProbeTemp1, ProductNumber, __version__
+from openacqu.chips.eeprom_24aa025e48 import (
+    DEFAULT_ADDRESS as EEPROM_ADDRESS,
+)
+from openacqu.chips.eeprom_24aa025e48 import (
+    USER_MEMORY_SIZE,
+)
 from openacqu.chips.lmp91200 import PgaGain, VcmLevel, VocmSelect
 from openacqu.chips.mcp9600 import AdcResolution, ThermocoupleType
 from openacqu.transport.base import I2CBus
@@ -74,6 +81,20 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="keep the USB handle open this many seconds (for scoping USBCFG)",
     )
+    usb_sub = usb.add_subparsers(dest="usb_command", required=False)
+    usbcfg = usb_sub.add_parser(
+        "usbcfg",
+        help="read or flash the USBCFG level used while USB is configured",
+    )
+    usbcfg.add_argument(
+        "level",
+        nargs="?",
+        choices=("high", "low"),
+        help=(
+            "flash this active level (pin level while USB is configured). "
+            "Omit to read the level stored in flash"
+        ),
+    )
 
     sub.add_parser("info", help="show product number, EUI-48, and MCP9600 identity")
 
@@ -112,6 +133,21 @@ def _build_parser() -> argparse.ArgumentParser:
     ee_write.add_argument(
         "data",
         help="hex bytes, e.g. deadbeef or de:ad:be:ef",
+    )
+    ee_stress = eeprom_sub.add_parser(
+        "stress",
+        help="erase, write random data, verify, then erase and verify the user EEPROM",
+    )
+    ee_stress.add_argument(
+        "--yes",
+        action="store_true",
+        help="proceed with the erase after the warning, without an interactive prompt",
+    )
+    ee_stress.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="seed for the random payload (a seed is printed either way)",
     )
 
     temp = sub.add_parser("temp", help="MCP9600 thermocouple commands")
@@ -192,6 +228,30 @@ def _keepalive_arg(args: argparse.Namespace) -> bool | float:
     return args.keepalive
 
 
+_EEPROM_STRESS_WARNING = (
+    "warning: the 24AA025E48 user EEPROM (0x00-0x7F, 128 bytes) will be erased. "
+    "The factory EUI-48 at 0xFA-0xFF is not modified."
+)
+
+
+def _confirm_eeprom_stress(args: argparse.Namespace) -> bool:
+    """Print the erase warning and require an explicit yes before continuing."""
+    print(_EEPROM_STRESS_WARNING)
+    if args.yes:
+        return True
+    if not sys.stdin.isatty():
+        print(
+            "error: refusing to erase the EEPROM without --yes",
+            file=sys.stderr,
+        )
+        return False
+    answer = input("Type yes to continue: ")
+    if answer.strip() != "yes":
+        print("aborted")
+        return False
+    return True
+
+
 def _open_probe(args: argparse.Namespace, bus: I2CBus | None) -> Probe:
     keepalive = _keepalive_arg(args)
     if args.command == "ph":
@@ -200,6 +260,15 @@ def _open_probe(args: argparse.Namespace, bus: I2CBus | None) -> Probe:
             check_product=args.check_product,
             keepalive=keepalive,
         )
+    # EEPROM commands must not wait on the thermocouple converter. That part
+    # can be absent or at another address while the user area is exercised.
+    if bus is None and args.command == "eeprom":
+        interval = keepalive if isinstance(keepalive, float) else None
+        bus = open_mcp2221_bus(
+            keepalive_s=interval,
+            ready_address=EEPROM_ADDRESS,
+        )
+        keepalive = False
     return ProbeTemp1(
         bus,
         check_product=args.check_product,
@@ -250,6 +319,8 @@ def _run_usb(args: argparse.Namespace, bus: I2CBus | None) -> int:
         bus.start_keepalive(float(keepalive) if keepalive is not True else 1.0)
 
     try:
+        if getattr(args, "usb_command", None) == "usbcfg":
+            return _run_usb_usbcfg(args, bus)
         status_fn = getattr(bus, "usb_status", None)
         if not callable(status_fn):
             raise TypeError("injected bus does not support usb_status()")
@@ -266,9 +337,27 @@ def _run_usb(args: argparse.Namespace, bus: I2CBus | None) -> int:
                 close()
 
 
+def _run_usb_usbcfg(args: argparse.Namespace, bus: I2CBus) -> int:
+    if not isinstance(bus, MCP2221Bus):
+        raise TypeError("USBCFG flash requires an MCP2221 bus")
+    if args.level is None:
+        level = bus.usbcfg_active_level()
+        print(f"active: {level}")
+        print(f"USBCFGINST: {0 if level == 'high' else 1}")
+        return 0
+    level = bus.flash_usbcfg_active_level(args.level)
+    print(f"active: {level}")
+    print(f"USBCFGINST: {0 if level == 'high' else 1}")
+    print("re-enumerate the MCP2221A before this level is used")
+    return 0
+
+
 def _run(args: argparse.Namespace, bus: I2CBus | None) -> int:
     if args.command == "usb":
         return _run_usb(args, bus)
+    if args.command == "eeprom" and args.eeprom_command == "stress":
+        if not _confirm_eeprom_stress(args):
+            return 1
     probe = _open_probe(args, bus)
     try:
         return _dispatch(args, probe)
@@ -339,6 +428,16 @@ def _dispatch(args: argparse.Namespace, probe: Probe) -> int:
             payload = _parse_hex_bytes(args.data)
             probe.eeprom.write(args.offset, payload)
             print(f"wrote {len(payload)} byte(s) at 0x{args.offset:02X}")
+            return 0
+        if args.eeprom_command == "stress":
+            seed = args.seed if args.seed is not None else random.randrange(2**32)
+            pattern = bytes(random.Random(seed).getrandbits(8) for _ in range(USER_MEMORY_SIZE))
+            eui = probe.eeprom.eui48_str
+            print(f"seed:  {seed}")
+            print(f"eui48: {eui}")
+            probe.eeprom.stress_user(pattern)
+            print(f"passed: {USER_MEMORY_SIZE} random bytes verified, user area erased")
+            print(f"eui48 unchanged: {probe.eeprom.eui48_str}")
             return 0
 
     if cmd == "temp":

@@ -123,3 +123,69 @@ def test_cli_usb(capsys) -> None:
     assert "vid: 0x04D8" in out
     assert "handle_open: True" in out
     assert "USBCFG" in out
+
+
+_CMD_READ_FLASH = 0xB0
+_CMD_WRITE_FLASH = 0xB1
+
+
+class _FlashDevice(_FakeDevice):
+    """Minimal flash image. Byte 0 is factory CDCSEC (USBCFG active-low)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chip = [0x7C, 0x12, 0xE0, 0xC4, 0xD8, 0x04, 0xDD, 0x00, 0x00, 0x32]
+        self.writes: list[list[int]] = []
+
+    def send_cmd(self, buf: list[int]) -> list[int]:
+        if buf[0] == _CMD_READ_FLASH and buf[1] == 0x00:
+            return [0xB0, 0x00, len(self.chip), 0, *self.chip]
+        if buf[0] == _CMD_WRITE_FLASH and buf[1] == 0x00:
+            data = list(buf[2:])
+            self.writes.append(data)
+            self.chip = data[:10]
+            return [0xB1, 0x00]
+        raise AssertionError(f"unexpected flash command {buf!r}")
+
+
+def test_usbcfg_active_level_reads_factory_active_low() -> None:
+    bus = MCP2221Bus(_FlashDevice())
+    assert bus.usbcfg_active_level() == "low"
+
+
+def test_flash_usbcfg_changes_only_inactive_bit() -> None:
+    device = _FlashDevice()
+    bus = MCP2221Bus(device)
+    original = list(device.chip)
+
+    assert bus.flash_usbcfg_active_level("high") == "high"
+    assert device.chip[0] == 0x78
+    assert device.chip[1:] == original[1:]
+    assert device.writes[-1][10:] == [0] * 8
+    assert bus.usbcfg_active_level() == "high"
+
+    assert bus.flash_usbcfg_active_level("low") == "low"
+    assert device.chip[0] == 0x7C
+    assert device.chip[1:] == original[1:]
+
+
+def test_flash_usbcfg_refuses_protected_chip() -> None:
+    device = _FlashDevice()
+    device.chip[0] = 0x7D  # protection bits set
+    bus = MCP2221Bus(device)
+    with pytest.raises(RuntimeError, match="protected"):
+        bus.flash_usbcfg_active_level("high")
+    assert device.writes == []
+
+
+def test_cli_usb_usbcfg_read_and_flash(capsys) -> None:
+    bus = MCP2221Bus(_FlashDevice())
+    assert main(["usb", "usbcfg"], bus=bus) == 0
+    assert capsys.readouterr().out == "active: low\nUSBCFGINST: 1\n"
+
+    assert main(["usb", "usbcfg", "high"], bus=bus) == 0
+    out = capsys.readouterr().out
+    assert "active: high" in out
+    assert "USBCFGINST: 0" in out
+    assert "re-enumerate" in out
+    assert bus.usbcfg_active_level() == "high"

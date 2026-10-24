@@ -31,6 +31,20 @@ from openacqu.transport.base import I2CDevice
 USB_VID = 0x04D8
 USB_PID = 0x00DD
 
+# Read/Write Flash Data, chip-settings sub-command. The 10 setting bytes in a
+# read response start at offset 4; a write sends those bytes followed by an
+# 8-byte password (zeros when the chip is unprotected).
+_CMD_READ_FLASH_DATA = 0xB0
+_CMD_WRITE_FLASH_DATA = 0xB1
+_FLASH_CHIP_SETTINGS = 0x00
+_FLASH_SETTINGS_OFFSET = 4
+_CHIP_SETTINGS_LEN = 10
+_FLASH_PASSWORD_LEN = 8
+# Chip-settings byte 0 bit 2 (USBCFGINST) is the pin level while USB is *not*
+# configured. While the device is configured, the pin is driven to the opposite
+# level. Active-low therefore stores 1; active-high stores 0.
+_USBCFG_INACTIVE_BIT = 1 << 2
+
 # Default pause after HID open/ping so a USBCFG-gated load switch can rise.
 DEFAULT_SETTLE_S = 0.05
 
@@ -178,10 +192,10 @@ class MCP2221Bus:
             "keepalive_active": self.keepalive_active,
             "keepalive_interval_s": self._keepalive_interval_s,
             "usbcfg_note": (
-                "GP2 USBCFG is high only while USB-configured and not suspended; "
-                "low during Suspend is expected without an active host session. "
-                "If USBCFG gates a load switch, I2C NAKs after reopen usually mean "
-                "Resume/settle did not complete before the first transaction."
+                "GP2 function is USBCFG. The flashed active level is the pin "
+                "level while USB is configured; the pin takes the opposite "
+                "level when the device is not configured or is suspended. "
+                "Read or program it with 'openacqu usb usbcfg'."
             ),
         }
         if self._closed or self._device is None:
@@ -197,6 +211,69 @@ class MCP2221Bus:
         except Exception as exc:  # pragma: no cover
             status["device_error"] = str(exc)
         return status
+
+    def usbcfg_active_level(self) -> str:
+        """Return the flashed USBCFG level while USB is configured.
+
+        Returns ``high`` or ``low``. This is the level stored in flash, which
+        the MCP2221A applies on the next reset or re-enumeration.
+        """
+        cdcsec = self._read_chip_settings()[0]
+        return "low" if cdcsec & _USBCFG_INACTIVE_BIT else "high"
+
+    def flash_usbcfg_active_level(self, level: str) -> str:
+        """Program the flashed USBCFG level used while USB is configured.
+
+        ``level`` is ``high`` or ``low``. Only the USBCFGINST bit is
+        changed; every other chip setting is written back unchanged. The new
+        value is read back from flash. It takes effect after the MCP2221A is
+        reset or the USB device is re-enumerated.
+        """
+        if level not in ("high", "low"):
+            raise ValueError("USBCFG active level must be 'high' or 'low'")
+        settings = self._read_chip_settings()
+        cdcsec = settings[0]
+        if cdcsec & 0b11:
+            raise RuntimeError(
+                "MCP2221A chip settings are protected; refusing to write flash"
+            )
+        if level == "low":
+            cdcsec |= _USBCFG_INACTIVE_BIT
+        else:
+            cdcsec &= ~_USBCFG_INACTIVE_BIT & 0xFF
+        settings[0] = cdcsec
+        self._write_chip_settings(settings)
+        actual = self.usbcfg_active_level()
+        if actual != level:
+            raise RuntimeError(
+                f"USBCFG flash verify failed: requested {level}, read back {actual}"
+            )
+        return actual
+
+    def _read_chip_settings(self) -> list[int]:
+        """Return the 10 chip-settings bytes stored in flash."""
+        response = self._flash_command([_CMD_READ_FLASH_DATA, _FLASH_CHIP_SETTINGS])
+        end = _FLASH_SETTINGS_OFFSET + _CHIP_SETTINGS_LEN
+        if len(response) < end:
+            raise RuntimeError("MCP2221A chip-settings read was short")
+        return list(response[_FLASH_SETTINGS_OFFSET:end])
+
+    def _write_chip_settings(self, settings: list[int]) -> None:
+        """Write chip settings plus a blank password (unprotected devices)."""
+        if len(settings) != _CHIP_SETTINGS_LEN:
+            raise ValueError(f"chip settings must be {_CHIP_SETTINGS_LEN} bytes")
+        payload = list(settings) + [0] * _FLASH_PASSWORD_LEN
+        self._flash_command([_CMD_WRITE_FLASH_DATA, _FLASH_CHIP_SETTINGS, *payload])
+
+    def _flash_command(self, command: list[int]) -> list[int]:
+        device = self.raw
+        send = getattr(device, "send_cmd", None)
+        if not callable(send):
+            raise TypeError("MCP2221 device does not support flash access")
+        response = list(send(command))
+        if len(response) < 2 or response[1] != 0:
+            raise RuntimeError("MCP2221A flash command failed")
+        return response
 
     def close(self) -> None:
         """Stop keep-alive and explicitly release the HID handle.
