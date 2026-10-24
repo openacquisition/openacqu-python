@@ -65,6 +65,28 @@ def test_cli_temp_read_status_type_filter_resolution(capsys) -> None:
     assert capsys.readouterr().out.strip() == "16"
 
 
+def test_cli_temp_stream_period(capsys, monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 3:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("openacqu.cli.time.sleep", sleep)
+    bus = _bus_with_temp_probe()
+    assert main(["temp", "stream"], bus=bus) == 0
+    assert sleeps == [0.5, 0.5, 0.5]
+    assert capsys.readouterr().out == "16.0000\n" * 3
+
+    sleeps.clear()
+    assert main(["temp", "stream", "--period", "0.25"], bus=bus) == 0
+    assert sleeps == [0.25, 0.25, 0.25]
+    capsys.readouterr()
+    assert main(["temp", "stream", "--period", "0"], bus=bus) == 1
+    assert "period must be > 0" in capsys.readouterr().err
+
+
 def test_cli_led_and_identify(capsys) -> None:
     bus = _bus_with_temp_probe()
     assert main(["led", "set", "1", "2", "3"], bus=bus) == 0

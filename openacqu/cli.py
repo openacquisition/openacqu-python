@@ -186,6 +186,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="seconds to wait for a conversion (default: 1.0)",
     )
+    temp_stream = temp_sub.add_parser(
+        "stream",
+        help="print hot-junction temperature until interrupted",
+    )
+    temp_stream.add_argument(
+        "--period",
+        type=float,
+        default=0.5,
+        metavar="SECONDS",
+        help="seconds between samples (default: 0.5)",
+    )
     temp_sub.add_parser("cold", help="read cold-junction (ambient) temperature")
     temp_sub.add_parser("status", help="show ready / open-circuit status flags")
 
@@ -387,6 +398,18 @@ def _run(args: argparse.Namespace, bus: I2CBus | None) -> int:
         probe.close()
 
 
+def _run_temp_stream(args: argparse.Namespace, probe: ProbeTemp1) -> int:
+    """Print the current hot-junction temperature every ``--period`` seconds."""
+    if args.period <= 0:
+        raise ValueError("period must be > 0")
+    try:
+        while True:
+            print(f"{probe.thermocouple.hot_junction_c:.4f}", flush=True)
+            time.sleep(args.period)
+    except KeyboardInterrupt:
+        return 0
+
+
 def _run_led_cycle(args: argparse.Namespace, probe: Probe) -> int:
     """Hold off, each indicator color, and off again for ``--dwell`` seconds."""
     if args.dwell <= 0:
@@ -491,6 +514,8 @@ def _dispatch(args: argparse.Namespace, probe: Probe) -> int:
             value = tc.read_hot_junction_c(wait=not args.no_wait, timeout_s=args.timeout)
             print(f"{value:.4f}")
             return 0
+        if args.temp_command == "stream":
+            return _run_temp_stream(args, probe)
         if args.temp_command == "cold":
             print(f"{tc.cold_junction_c:.4f}")
             return 0

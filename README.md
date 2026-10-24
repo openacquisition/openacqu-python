@@ -39,6 +39,7 @@ openacqu led color orange --brightness 0.5
 openacqu led colors
 openacqu led off
 openacqu temp read
+openacqu temp stream
 openacqu temp status
 openacqu temp type K
 openacqu temp filter 0
