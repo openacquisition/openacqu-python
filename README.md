@@ -67,7 +67,7 @@ Hardware-in-the-loop scripts also live under `examples/`.
 
 | Chip | Role | I2C (schematic) |
 | --- | --- | --- |
-| LP5817 | RGB LED driver (+ CSS colors / CIE L* dimming) | `0x2D` |
+| LP5817 | RGB LED driver (+ CSS colors / CIE L* dimming) | `0x2D`; broadcast `0x34` (unused) |
 | 24AA025E48 | EEPROM + EUI-48 | `0x50` (A0=A1=GND) |
 | FXL6408 | Product number (read-only) | `0x43` (ADDR=GND); `0x01` = temp probe |
 | MCP9600 | Thermocouple (ProbeTemp1) | `0x67` |

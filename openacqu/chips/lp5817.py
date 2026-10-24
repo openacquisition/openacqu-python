@@ -2,6 +2,10 @@
 
 Schematic mapping (common-anode RGB LED):
   OUT0 → LED_R, OUT1 → LED_G, OUT2 → LED_B
+
+The part answers at two 7-bit addresses. This driver uses the independent
+address. The broadcast address is shared with the LP5814, LP5815, and LP5816
+and is recorded here so a bus scan can name it.
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ from openacqu.colors import DEFAULT_PROFILE, LedColorProfile, resolve_to_pwm
 from openacqu.transport.base import I2CBus, I2CDevice
 
 DEFAULT_ADDRESS = 0x2D
+# Family broadcast address (LP5814/LP5815/LP5816/LP5817). Not used by this driver.
+BROADCAST_ADDRESS = 0x34
 
 _CHIP_EN = 0x00
 _DEV_CONFIG0 = 0x01
