@@ -6,7 +6,7 @@ from openacqu.chips.eeprom_24aa025e48 import EUI48_OFFSET, USER_MEMORY_SIZE, EEP
 from openacqu.chips.lp5817 import LP5817
 from openacqu.colors import INDICATOR_COLORS, indicator_pwm
 from openacqu.chips.fxl6408 import DEFAULT_ADDRESS as FXL_ADDR
-from openacqu.chips.mcp9600 import EXPECTED_DEVICE_ID
+from openacqu.chips.mcp9600 import DEFAULT_ADDRESS as MCP_ADDR, EXPECTED_DEVICE_ID
 from openacqu.chips.sc18is606 import DEFAULT_ADDRESS as BRIDGE_ADDR
 from openacqu.cli import main
 from openacqu.product import ProductNumber
@@ -20,7 +20,7 @@ def _bus_with_temp_probe() -> FakeI2CBus:
     bus.memory(0x50)[EUI48_OFFSET : EUI48_OFFSET + 6] = bytes(
         [0x00, 0x04, 0xA3, 0x11, 0x22, 0x33]
     )
-    mcp = bus.memory(0x67)
+    mcp = bus.memory(MCP_ADDR)
     mcp[0x00:0x02] = bytes([0x01, 0x00])  # 16.0 °C hot
     mcp[0x02:0x04] = bytes([0x00, 0x40])  # 4.0 °C cold
     mcp[0x04] = 0x40  # TH_UPDATE

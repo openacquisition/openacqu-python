@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from openacqu.chips.mcp9600 import (
+    DEFAULT_ADDRESS,
     EXPECTED_DEVICE_ID,
     AdcResolution,
     MCP9600,
@@ -13,7 +14,7 @@ from openacqu.chips.mcp9600 import (
 from openacqu.transport.fake import FakeI2CBus
 
 
-def _sensor(bus: FakeI2CBus, address: int = 0x67) -> tuple[MCP9600, bytearray]:
+def _sensor(bus: FakeI2CBus, address: int = DEFAULT_ADDRESS) -> tuple[MCP9600, bytearray]:
     memory = bus.memory(address)
     return MCP9600(bus, address=address), memory
 

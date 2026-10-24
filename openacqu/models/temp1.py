@@ -31,7 +31,7 @@ class ProbeTemp1(Probe):
         Optional I2C bus. When omitted, the first MCP2221/MCP2221A is opened.
         Pass a ``FakeI2CBus`` (or any ``I2CBus``) in tests.
     mcp9600_address:
-        7-bit I2C address of the MCP9600 (depends on ADDR pins; default 0x67).
+        7-bit I2C address of the MCP9600. Probe hardware is 0x60 (ADDR tied to GND).
     check_product:
         When true, verify the GPIO expander product number is ``0x01``.
     keepalive:

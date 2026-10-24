@@ -12,8 +12,9 @@ from enum import IntEnum
 
 from openacqu.transport.base import I2CBus, I2CDevice
 
-# Default ADDR-pin configuration used on ProbeTemp1 hardware.
-DEFAULT_ADDRESS = 0x67
+# ADDR pin tied to GND on the probe → 7-bit address 0x60.
+# The Microchip development kit uses 0x67; pass that address explicitly.
+DEFAULT_ADDRESS = 0x60
 EXPECTED_DEVICE_ID = 0x40
 
 _STATUS_BURST_COMPLETE = 0x80
