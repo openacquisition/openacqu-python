@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openacqu"
+version = "0.1.0"
+description = "Python library for Open Acquisition USB/I2C measurement probes"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "openacquisition" }]
+dependencies = [
+    "EasyMCP2221>=1.8.4",
+    "webcolors>=24.6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+openacqu = "openacqu.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["openacqu*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
